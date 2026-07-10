@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+*.stackdump
+.DS_Store
+coverage/
+*.tsbuildinfo
+# local scratch
+tmp/
+*.local.yaml
+# local integration-test credentials (never commit)
+.env*.local

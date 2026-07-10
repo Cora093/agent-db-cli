@@ -1,0 +1,50 @@
+# agent-db-cli 数据源配置示例
+#
+# 放置位置(按 OS 自算,见 README):
+#   Linux:   ~/.config/agent-db-cli/datasources.yaml   (记得 chmod 600)
+#   Windows: %APPDATA%\agent-db-cli\datasources.yaml
+#   覆盖:    AGENT_DB_CLI_CONFIG=/path/to/this.yaml
+#
+# 安全:配置含明文密码 —— 排除同步盘/备份;用可轮换的只读账号;真护栏在 DB 层(只读账号+只读副本)。
+
+datasources:
+  # MySQL:database 即命名空间
+  prod-mysql-ro:
+    label: 订单生产库(只读)        # 可选,人话业务名,帮 Agent 选对源
+    driver: mysql
+    host: prod-mysql-readonly.internal
+    port: 3306
+    database: orders
+    user: app_readonly
+    password: "xxxxxx"             # 不分家:密码写这;也支持 env:VAR 引用
+
+  # Doris:走 MySQL 协议,但 driver 点名真引擎
+  bi-doris-ro:
+    label: BI 数仓 · Doris
+    driver: doris
+    host: doris-fe.internal
+    port: 9030
+    database: dw
+    user: bi_reader
+    password: env:BI_DORIS_PWD     # 从环境变量取,文件里不落明文
+
+  # PostgreSQL:连到 database,表在其内的 schema 里
+  analytics-pg-ro:
+    label: 分析库 · PG
+    driver: postgres
+    host: pg-replica.internal
+    port: 5432
+    database: appdb
+    schema: sales                  # 可选:裸表名默认 schema;省略则按 search_path
+    user: ro_user
+    password: "xxxxxx"
+
+  # 达梦 DM:schema = user;实例级 "database" 基本不用
+  dm-core-ro:
+    label: 风控达梦库(只读)
+    driver: dm
+    host: dm-core.internal
+    port: 5236
+    user: READONLY_USER
+    schema: FINANCE                # 可选:默认 schema;省略则用连接用户自己的 schema
+    password: "xxxxxx"

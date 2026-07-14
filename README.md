@@ -30,16 +30,18 @@
 ## 本地运行
 
 ```bash
-npm install
-npm run build
-npm run dev -- --version
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run dev -- --version
 ```
 
-开发时通过 `npm run dev --` 调用 CLI：
+本仓库使用 Corepack 固定 `pnpm@11.13.0`。首次使用前请启用 Corepack：`corepack enable`。
+
+开发时通过 `pnpm run dev --` 调用 CLI：
 
 ```bash
-npm run dev -- list
-npm run dev -- query --ds prod-mysql-ro "SELECT 1"
+pnpm run dev -- list
+pnpm run dev -- query --ds prod-mysql-ro "SELECT 1"
 ```
 
 构建后入口位于 `dist/cli.js`，bin 名为 `agent-db`。
@@ -168,12 +170,12 @@ SQL 守卫用于防误操作，不是完整 SQL 沙箱，也不能替代数据�
 ## 开发验证
 
 ```bash
-npm run typecheck
-npm test
-npx vitest run test/guard.test.ts
+pnpm run typecheck
+pnpm test
+pnpm exec vitest run test/guard.test.ts
 ```
 
-`npm test` 只运行本地单元测试，不需要真实数据库。
+`pnpm test` 只运行本地单元测试，不需要真实数据库。
 
 集成测试默认不跑真实库。需要手动准备目标数据库，并创建夹具命名空间 `test20260609`：
 
@@ -182,7 +184,7 @@ AGENT_DB_CLI_IT_MYSQL='mysql://user:pass@host:3306' \
 AGENT_DB_CLI_IT_PG='postgres://user:pass@host:5432/postgres' \
 AGENT_DB_CLI_IT_DORIS='mysql://user:pass@host:9030' \
 AGENT_DB_CLI_IT_DM='dm://user:pass@host:5236' \
-npm run test:it
+pnpm run test:it
 ```
 
 只会运行设置了对应 `AGENT_DB_CLI_IT_*` 变量的引擎测试。

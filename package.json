@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "供 AI Agent 使用的只读多数据源数据库查询 CLI",
   "private": true,
+  "packageManager": "pnpm@11.13.0",
   "type": "module",
   "bin": {
     "agent-db": "dist/cli.js"

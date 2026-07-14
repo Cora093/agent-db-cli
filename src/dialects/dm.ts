@@ -121,7 +121,7 @@ export class DmDialect implements Dialect {
       }
     } catch (err) {
       throw new AppError('DRIVER_MISSING', '达梦驱动 dmdb 未安装或加载失败', {
-        hint: '安装可选依赖: npm i dmdb(纯 JS 驱动,无需原生编译/达梦客户端库)',
+        hint: '安装可选依赖: pnpm add dmdb(纯 JS 驱动,无需原生编译/达梦客户端库)',
         cause: err,
       });
     }

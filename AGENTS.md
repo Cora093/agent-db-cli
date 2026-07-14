@@ -23,18 +23,18 @@
 ## 常用命令
 
 ```bash
-npm run build
-npm run typecheck
-npm test
-npx vitest run test/guard.test.ts
-npm run dev -- list
-npm run dev -- query --ds <id> "SELECT 1"
+pnpm run build
+pnpm run typecheck
+pnpm test
+pnpm exec vitest run test/guard.test.ts
+pnpm run dev -- list
+pnpm run dev -- query --ds <id> "SELECT 1"
 ```
 
 集成测试默认不跑真实库。需要时设置门控变量后手动执行：
 
 ```bash
-npm run test:it
+pnpm run test:it
 ```
 
 门控变量：
@@ -111,8 +111,8 @@ src/cli.ts
 修改 guard 时至少运行：
 
 ```bash
-npx vitest run test/guard.test.ts
-npm test
+pnpm exec vitest run test/guard.test.ts
+pnpm test
 ```
 
 ## 方言和驱动
@@ -207,7 +207,7 @@ datasources:
 
 - `skills/` 是配套 Agent skill 的版本化副本。改 CLI 行为时同步检查 skill 示例。
 - 稳定用户说明放 README；维护细节放本文件。
-- GitHub Actions 只跑本地单元验证：`npm ci`、`npm run typecheck`、`npm test`。
+- GitHub Actions 只跑本地单元验证：`pnpm install --frozen-lockfile`、`pnpm run typecheck`、`pnpm test`。
 - 暂不配置 npm publish、GitHub Release 或包发布流程。
 - `package.json` 当前保持 `private: true`。
 - 不新增独立 docs 目录，除非用户明确改变仓库策略。
@@ -216,8 +216,8 @@ datasources:
 
 提交前按改动类型选择验证：
 
-- 普通源码改动：`npm run typecheck`、`npm test`。
-- SQL guard 改动：再跑 `npx vitest run test/guard.test.ts`。
+- 普通源码改动：`pnpm run typecheck`、`pnpm test`。
+- SQL guard 改动：再跑 `pnpm exec vitest run test/guard.test.ts`。
 - 输出改动：重点跑输出相关测试。
 - driver / dialect 改动：补充对应 dialect、normalize、db-error、integration gate 说明。
 - README / AGENTS 改动：至少跑 `git diff --check`。

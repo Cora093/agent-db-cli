@@ -10,7 +10,7 @@ import { run, type CliIO } from '../../src/app.js';
  * 夹具(命名空间 test20260609 + 数据)由一次性脚本预先建好,测试只读不建。
  *
  * 门控:各引擎套件按 `AGENT_DB_CLI_IT_*` 连接 URL 是否存在决定 describe / describe.skip,
- * 故未配变量时 `npm test` 仍全绿(整套 skip)。
+ * 故未配变量时 `pnpm test` 仍全绿(整套 skip)。
  */
 
 // 本地便利:若仓库根有 .env.it.local(已 gitignore),把其中变量注入 process.env。

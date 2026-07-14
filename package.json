@@ -9,7 +9,7 @@
     "agent-db": "dist/cli.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

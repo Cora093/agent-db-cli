@@ -2,6 +2,20 @@
 
 本文档面向在本仓库工作的 AI Agent。先读这里，再改代码。
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default mattpocock/skills triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. See `docs/agents/domain.md`.
+
 ## 项目定位
 
 `agent-db-cli` 是只读、多数据源的数据库查询 CLI。它给本地开发者和 Agent 提供统一命令，用来列出数据源、查看表、查看 schema、执行读取查询。

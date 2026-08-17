@@ -10,3 +10,8 @@ tmp/
 *.local.yaml
 # local integration-test credentials (never commit)
 .env*.local
+
+# repo-local Agent skills
+.agents/
+.claude/
+skills-lock.json

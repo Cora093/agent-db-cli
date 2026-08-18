@@ -45,13 +45,16 @@ describe('resolveDatasource (§5/§6/§7)', () => {
     ).toThrow(/allowLocalInfile/);
   });
 
-  it('doris 等 mysql 协议族沿用 mysql 选项策略', () => {
-    const r = resolveDatasource(
-      { ...base, driver: 'doris', port: 9030, options: { connectTimeout: 1000 } },
-      {},
-    );
-    expect(r.safeOptions.multipleStatements).toBe(false);
-  });
+  it.each(['mysql', 'doris', 'starrocks', 'tidb', 'oceanbase'] as const)(
+    '%s 从 descriptor 沿用 mysql 协议族选项策略',
+    (driver) => {
+      const r = resolveDatasource(
+        { ...base, driver, options: { connectTimeout: 1000 } },
+        {},
+      );
+      expect(r.safeOptions).toEqual({ connectTimeout: 1000, multipleStatements: false });
+    },
+  );
 
   it('postgres 选项策略独立(不强制 multipleStatements)', () => {
     const r = resolveDatasource(

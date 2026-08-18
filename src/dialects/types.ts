@@ -95,16 +95,6 @@ export interface Dialect {
   /** 包只读事务 + 服务端超时 + 限行;读完 ROLLBACK。 */
   runReadOnly(conn: Conn, sql: string, opts: RunOptions): Promise<QueryResult>;
 
-  // —— 引擎语义:策略差异点(主要由 runReadOnly 内部使用,导出便于测试) ——
-  /** 开只读事务的 SQL,如 'START TRANSACTION READ ONLY';null=不包显式只读事务(OLAP) */
-  readOnlyTxnSQL(): string | null;
-  /** 是否必须 autoCommit=false 才能让只读事务跨语句生效(DM=true) */
-  needsAutocommitOff(): boolean;
-  /** 服务端超时 SQL;入参恒为毫秒,策略内自换算单位;null=不通过 SQL 设置 */
-  statementTimeoutSQL(ms: number): string | null;
-
   listTables(conn: Conn, like?: string): Promise<TableInfo[]>;
   getSchema(conn: Conn, table: string, schema?: string): Promise<TableSchema>;
-
-  mapType(raw: unknown): SqlValue;
 }

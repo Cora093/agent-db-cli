@@ -1,28 +1,23 @@
 import mysql from 'mysql2/promise';
 import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema, IndexInfo } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
-import type { DriverName, SqlValue } from '../types.js';
+import type { DriverName } from '../types.js';
+import type { ExecutionPolicy, IntrospectionCapability } from './descriptors.js';
 import { AppError } from '../errors.js';
-import { normalizeValue } from './normalize.js';
 import { applyLimit, mapRows } from './sql-util.js';
 import { classifyMysqlError } from './db-error.js';
 
 export interface FamilyParams {
   driver: DriverName;
-  /** 只读事务 SQL;null=不包(OLAP) */
-  readOnlyTxn: string | null;
-  /** 服务端超时 SQL;入参毫秒 */
-  timeoutSql: (ms: number) => string | null;
-  /** 自省深度:full=列+主键+索引;best-effort=仅列 */
-  introspection: 'full' | 'best-effort';
+  defaultPort: number;
+  introspection: IntrospectionCapability;
+  execution: ExecutionPolicy;
 }
 
 interface MysqlConn extends Conn {
   raw: mysql.Connection;
   database?: string;
 }
-
-const DEFAULT_PORT = 3306;
 
 /**
  * mysql2 协议列类型码(field.type,Types 枚举)→ ColKind(A3)。
@@ -61,24 +56,12 @@ export class MysqlFamilyDialect implements Dialect {
     return this.p.driver;
   }
 
-  readOnlyTxnSQL(): string | null {
-    return this.p.readOnlyTxn;
-  }
-
-  needsAutocommitOff(): boolean {
-    return false;
-  }
-
-  statementTimeoutSQL(ms: number): string | null {
-    return this.p.timeoutSql(ms);
-  }
-
   async connect(cfg: ResolvedDatasource): Promise<Conn> {
     let raw: mysql.Connection;
     try {
       raw = await mysql.createConnection({
         host: cfg.host,
-        port: cfg.port ?? DEFAULT_PORT,
+        port: cfg.port ?? this.p.defaultPort,
         user: cfg.user,
         password: cfg.password,
         database: cfg.database,
@@ -108,10 +91,12 @@ export class MysqlFamilyDialect implements Dialect {
   async runReadOnly(conn: Conn, sql: string, opts: RunOptions): Promise<QueryResult> {
     const c = conn as MysqlConn;
     const start = Date.now();
-    const tSql = this.p.timeoutSql(opts.timeoutMs);
+    const { timeout, readOnlyTransaction } = this.p.execution;
     try {
-      if (tSql) await c.raw.query(tSql);
-      if (this.p.readOnlyTxn) await c.raw.query(this.p.readOnlyTxn);
+      if (timeout.unit !== 'none') await c.raw.query(timeout.sql(opts.timeoutMs));
+      if (readOnlyTransaction.strength !== 'account-only') {
+        await c.raw.query(readOnlyTransaction.beginSql);
+      }
 
       const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
       const [rows, fields] = await c.raw.query({ sql: execSql, rowsAsArray: true });
@@ -122,9 +107,9 @@ export class MysqlFamilyDialect implements Dialect {
     } catch (err) {
       throw classifyMysqlError(err);
     } finally {
-      if (this.p.readOnlyTxn) {
+      if (readOnlyTransaction.strength !== 'account-only') {
         try {
-          await c.raw.query('ROLLBACK');
+          await c.raw.query(readOnlyTransaction.rollbackSql);
         } catch {
           /* 已读完,回滚失败忽略 */
         }
@@ -205,9 +190,6 @@ export class MysqlFamilyDialect implements Dialect {
     return { schema: target, table, columns, primaryKey, indexes, comment };
   }
 
-  mapType(raw: unknown): SqlValue {
-    return normalizeValue(raw);
-  }
 }
 
 async function currentDatabase(raw: mysql.Connection): Promise<string> {

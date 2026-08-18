@@ -110,7 +110,14 @@ datasources:
     }
   });
 
-  it('driver 不在白名单 → CONFIG 列出合法值', () => {
+  it('descriptor 注册的 7 个 driver 都通过配置校验', () => {
+    const entries = ['mysql', 'doris', 'starrocks', 'tidb', 'oceanbase', 'postgres', 'dm']
+      .map((driver) => `  ${driver}:\n    driver: ${driver}\n    host: h\n    user: u`)
+      .join('\n');
+    expect(Object.keys(parseConfig(`datasources:\n${entries}`, PATH).datasources)).toHaveLength(7);
+  });
+
+  it('driver 不在 descriptor registry → CONFIG 列出合法值', () => {
     const bad = `
 datasources:
   x:

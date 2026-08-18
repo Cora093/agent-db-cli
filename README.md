@@ -27,6 +27,20 @@
 | PostgreSQL | `postgres` |
 | 达梦 DM | `dm` |
 
+### Driver 能力矩阵
+
+以下矩阵由统一 driver descriptor 校验。`account-only` 表示引擎不启用显式只读事务,安全边界依赖只读账号;`DML-only` 表示显式只读事务主要阻断 DML。超时单位是发送给服务端变量的单位,CLI 的 `--timeout` 仍统一使用秒。
+
+| driver | protocol | default port | introspection | read-only transaction | timeout unit | cancellation | row limit |
+|---|---|---:|---|---|---|---|---|
+| `mysql` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
+| `doris` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
+| `starrocks` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
+| `tidb` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
+| `oceanbase` | mysql | 3306 | best-effort | DML-only | us | connection-close | SQL rewrite |
+| `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite |
+| `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + maxRows |
+
 ## 本地运行
 
 ```bash

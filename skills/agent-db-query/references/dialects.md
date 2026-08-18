@@ -41,20 +41,21 @@
 - **达梦 DM 例外**:dmdb 驱动不透出列类型,**所有值(含 INT/FLOAT/日期)一律字符串**交付。
   数值比较、排序、聚合在 SQL 里做(DB 端类型是对的);别在客户端把 `"42"` 当 number 依赖。
 
-## 自省深度
+## Driver 能力矩阵
 
-| 引擎 | `schema` 命令 |
-|---|---|
-| MySQL / PostgreSQL / DM | **完整**:列 + 类型 + 主键 + 索引 + 注释 |
-| Doris / StarRocks / TiDB / OceanBase | **best-effort**:列与类型完整;索引/主键/sort-key 标 `N/A`,完整定义见 `SHOW CREATE TABLE` |
+以下矩阵由 CLI 的统一 driver descriptor 校验。`account-only` 表示不包显式只读事务;`DML-only` 表示显式只读事务主要阻断 DML。超时单位是服务端设置单位,CLI 参数仍使用秒。
+
+| driver | protocol | default port | introspection | read-only transaction | timeout unit | cancellation | row limit |
+|---|---|---:|---|---|---|---|---|
+| `mysql` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
+| `doris` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
+| `starrocks` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
+| `tidb` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
+| `oceanbase` | mysql | 3306 | best-effort | DML-only | us | connection-close | SQL rewrite |
+| `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite |
+| `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + maxRows |
 
 - 对 best-effort 引擎想看键/分布,直接 `query --ds <id> "SHOW CREATE TABLE <t>"`。
-
-## 只读事务强度(背景知识,不影响写法)
-
-- **PostgreSQL**:强。可写 CTE(`WITH ... DELETE ... RETURNING`)、`EXPLAIN ANALYZE INSERT` 都被只读事务挡下。
-- **MySQL 族**:挡 DML;文件写(`INTO OUTFILE`)由工具守卫额外拦。
-- **DM**:支持只读事务。
-- **Doris / StarRocks(OLAP)**:不包显式只读事务,靠**只读账号**(① 层)兜底。
-
-无论哪种,真正的边界永远是 **只读账号 + 只读事务**;你只管写只读 SELECT 即可。
+- PostgreSQL 的强只读事务会阻断可写 CTE 和 `EXPLAIN ANALYZE INSERT`。
+- MySQL 协议族的文件写(`INTO OUTFILE`)仍由工具守卫额外拦截。
+- 无论哪种,真正的边界永远是只读账号;只读事务和守卫是纵深防护。

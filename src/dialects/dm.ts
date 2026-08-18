@@ -1,12 +1,10 @@
 import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
-import type { DriverName, SqlValue } from '../types.js';
+import type { DriverName } from '../types.js';
+import type { ExecutionPolicy } from './descriptors.js';
 import { AppError } from '../errors.js';
-import { normalizeValue } from './normalize.js';
 import { applyLimit, mapRows } from './sql-util.js';
 import { classifyDmError } from './db-error.js';
-
-const DEFAULT_PORT = 5236;
 
 interface DmConn extends Conn {
   raw: DmRawConnection;
@@ -87,23 +85,10 @@ function dmColKinds(meta: DmColumnMeta[]): ColKind[] {
  * 当前实现按 Oracle 风格假设,并对标识符做白名单校验后插值(避免 bind 风格不确定)。
  */
 export class DmDialect implements Dialect {
+  constructor(private readonly config: { defaultPort: number; execution: ExecutionPolicy }) {}
+
   get driver(): DriverName {
     return 'dm';
-  }
-
-  readOnlyTxnSQL(): string {
-    return 'SET TRANSACTION READ ONLY';
-  }
-
-  needsAutocommitOff(): boolean {
-    return true;
-  }
-
-  statementTimeoutSQL(_ms: number): string | null {
-    // §14 真机确认:DM 无 MySQL max_execution_time / PG statement_timeout 那样的
-    // 服务端「单条语句」超时 SQL(V$DM_INI 里的 *_TIMEOUT 都是子系统级,非语句级)。
-    // 故恒返回 null,超时仅靠客户端兜底(本工具到点中断连接)。
-    return null;
   }
 
   async connect(cfg: ResolvedDatasource): Promise<Conn> {
@@ -128,7 +113,7 @@ export class DmDialect implements Dialect {
     let raw: DmRawConnection;
     try {
       raw = await dmdb.getConnection({
-        connectString: `${cfg.host}:${cfg.port ?? DEFAULT_PORT}`,
+        connectString: `${cfg.host}:${cfg.port ?? this.config.defaultPort}`,
         user: cfg.user,
         password: cfg.password,
         // 只读事务跨语句生效的前提
@@ -166,13 +151,20 @@ export class DmDialect implements Dialect {
   async runReadOnly(conn: Conn, sql: string, opts: RunOptions): Promise<QueryResult> {
     const c = conn as DmConn;
     const start = Date.now();
+    const transaction = this.config.execution.readOnlyTransaction;
+    if (transaction.strength === 'account-only') {
+      throw new AppError('INTERNAL', 'DM descriptor 缺少只读事务策略');
+    }
     try {
-      await c.raw.execute(this.readOnlyTxnSQL(), [], { autoCommit: false });
+      await c.raw.execute(transaction.beginSql, [], { autoCommit: transaction.autoCommit });
 
       const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
       // maxRows:驱动级限行兜底(C)。applyLimit 对 TOP/ROWNUM 等形态跳过改写时,
       // 仍由 dmdb 在取数层封顶,杜绝全量缓冲 OOM。
-      const result = await c.raw.execute(execSql, [], { autoCommit: false, maxRows: opts.limit + 1 });
+      const result = await c.raw.execute(execSql, [], {
+        autoCommit: transaction.autoCommit,
+        maxRows: opts.limit + 1,
+      });
       const meta = result.metaData ?? [];
       const columns = meta.map((m) => m.name);
 
@@ -182,7 +174,7 @@ export class DmDialect implements Dialect {
     } finally {
       try {
         if (c.raw.rollback) await c.raw.rollback();
-        else await c.raw.execute('ROLLBACK', [], { autoCommit: false });
+        else await c.raw.execute(transaction.rollbackSql, [], { autoCommit: transaction.autoCommit });
       } catch {
         /* ignore */
       }
@@ -237,9 +229,6 @@ export class DmDialect implements Dialect {
     };
   }
 
-  mapType(raw: unknown): SqlValue {
-    return normalizeValue(raw);
-  }
 }
 
 /** 标识符白名单校验(DM bind 风格不确定时用于安全插值)。 */

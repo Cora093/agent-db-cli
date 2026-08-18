@@ -1,5 +1,6 @@
 import { AppError } from '../errors.js';
 import type { DriverName, StatementKind } from '../types.js';
+import { getDriverDescriptor, type LexProfile } from '../dialects/descriptors.js';
 
 export interface GuardResult {
   /** 净化后(注释剥离、结尾分号去除)待执行的 SQL */
@@ -29,58 +30,9 @@ interface Statement {
   masked: string;
 }
 
-/**
- * 词法配置(G):sanitize 按引擎语义裁注释/认字符串,
- * 否则 PG `#` 运算符被当注释剪掉(静默错数据)、`5--1` 语义改变、
- * 反斜杠/dollar-quote 与引擎背离造成多语句绕过或单语句误拒。
- */
-interface LexProfile {
-  /** '#' 是否行注释(MySQL 族是;PG 是运算符;DM 无) */
-  hashComment: boolean;
-  /** '--' 是否要求后随空白/行尾才算注释(MySQL/DM 是;PG 任意) */
-  dashNeedsWhitespace: boolean;
-  /** 字符串内 '\' 是否转义(MySQL 族是;PG standard_conforming_strings/DM 否) */
-  backslashEscape: boolean;
-  /** 是否识别 $$..$$ / $tag$..$tag$ dollar-quote 字符串(仅 PG) */
-  dollarQuote: boolean;
-  /** '`' 是否引用符(仅 MySQL 族) */
-  backtickQuote: boolean;
-}
-
-const MYSQL_LEX: LexProfile = {
-  hashComment: true,
-  dashNeedsWhitespace: true,
-  backslashEscape: true,
-  dollarQuote: false,
-  backtickQuote: true,
-};
-
-const PG_LEX: LexProfile = {
-  hashComment: false,
-  dashNeedsWhitespace: false,
-  backslashEscape: false,
-  dollarQuote: true,
-  backtickQuote: false,
-};
-
-const DM_LEX: LexProfile = {
-  hashComment: false,
-  dashNeedsWhitespace: true,
-  backslashEscape: false,
-  dollarQuote: false,
-  backtickQuote: false,
-};
-
+/** 未指明 driver 时沿用存量 MySQL 词法;有 driver 时 descriptor 是唯一事实来源。 */
 function lexFor(driver?: DriverName): LexProfile {
-  switch (driver) {
-    case 'postgres':
-      return PG_LEX;
-    case 'dm':
-      return DM_LEX;
-    default:
-      // mysql 族(mysql/doris/starrocks/tidb/oceanbase);未指明时也取最保守的 MySQL 语义
-      return MYSQL_LEX;
-  }
+  return getDriverDescriptor(driver ?? 'mysql').lex;
 }
 
 /**

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { AppError } from '../errors.js';
-import { DRIVER_NAMES, type DriverName } from '../types.js';
+import { DRIVER_NAMES, isDriverName } from '../dialects/descriptors.js';
 import type { Config, DatasourceConfig } from './types.js';
 import { resolveConfigPath } from './paths.js';
 import { checkConfigPermissions } from './permissions.js';
@@ -64,7 +64,7 @@ function validateDatasource(id: string, raw: unknown): DatasourceConfig {
       hint: `合法 driver: ${DRIVER_NAMES.join(', ')}`,
     });
   }
-  if (!(DRIVER_NAMES as readonly string[]).includes(driver)) {
+  if (!isDriverName(driver)) {
     throw new AppError('CONFIG', `数据源 '${id}' 的 driver '${driver}' 不支持`, {
       hint: `合法 driver: ${DRIVER_NAMES.join(', ')}`,
     });
@@ -82,7 +82,7 @@ function validateDatasource(id: string, raw: unknown): DatasourceConfig {
 
   const cfg: DatasourceConfig = {
     id,
-    driver: driver as DriverName,
+    driver,
     host,
     user,
   };

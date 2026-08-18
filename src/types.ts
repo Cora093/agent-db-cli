@@ -10,16 +10,6 @@ export type DriverName =
   | 'postgres'
   | 'dm';
 
-export const DRIVER_NAMES: readonly DriverName[] = [
-  'mysql',
-  'doris',
-  'starrocks',
-  'tidb',
-  'oceanbase',
-  'postgres',
-  'dm',
-];
-
 /** SQL 守卫识别出的首关键字类别(§7)。决定是否放行 + 是否需要 LIMIT 改写。 */
 export type StatementKind = 'select' | 'with' | 'show' | 'explain' | 'describe';
 

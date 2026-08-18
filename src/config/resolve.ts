@@ -1,7 +1,7 @@
 import type { DatasourceConfig, ResolvedDatasource } from './types.js';
 import { resolveSecret } from './secrets.js';
 import { sanitizeOptions } from '../safety/options.js';
-import { optionPolicy } from '../dialects/options-policy.js';
+import { getDriverDescriptor } from '../dialects/descriptors.js';
 
 /**
  * 把配置里的原始数据源解析为可直接用于连接的形态(§5/§6/§7):
@@ -15,8 +15,12 @@ export function resolveDatasource(
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedDatasource {
   const password = resolveSecret(cfg.password, env);
-  const policy = optionPolicy(cfg.driver);
-  const safeOptions = sanitizeOptions(cfg.options, policy.allow, policy.force);
+  const descriptor = getDriverDescriptor(cfg.driver);
+  const safeOptions = sanitizeOptions(
+    cfg.options,
+    descriptor.connection.options.allow,
+    descriptor.connection.options.force,
+  );
 
   const { password: _omit, options: _omit2, ...rest } = cfg;
   return { ...rest, password, safeOptions };

@@ -183,10 +183,10 @@ describe('guardSql — 词法方言化 (G)', () => {
     expect(r.sql).toBe(`SELECT data #>> '{a,b}' FROM t`);
   });
 
-  it("MySQL:'#' 仍是行注释", () => {
-    const r = guardSql('SELECT 1 # trailing\n', 'mysql');
-    expect(r.sql).toBe('SELECT 1');
-  });
+  it.each(['mysql', 'doris', 'starrocks', 'tidb', 'oceanbase'] as const)(
+    "%s descriptor 使用 MySQL '#' 行注释词法",
+    (driver) => expect(guardSql('SELECT 1 # trailing\n', driver).sql).toBe('SELECT 1'),
+  );
 
   it('MySQL:5--1 是运算式不是注释,语义不被篡改(G2)', () => {
     const r = guardSql('SELECT 5--1', 'mysql');

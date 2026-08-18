@@ -1,13 +1,11 @@
 import pg from 'pg';
 import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema, IndexInfo } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
-import type { DriverName, SqlValue } from '../types.js';
+import type { DriverName } from '../types.js';
+import type { ExecutionPolicy } from './descriptors.js';
 import { AppError } from '../errors.js';
-import { normalizeValue } from './normalize.js';
 import { applyLimit, mapRows } from './sql-util.js';
 import { classifyPgError } from './db-error.js';
-
-const DEFAULT_PORT = 5432;
 
 interface PgConn extends Conn {
   raw: pg.Client;
@@ -76,26 +74,16 @@ const PG_TYPES: pg.CustomTypesConfig = {
 
 /** PostgreSQL 方言。命名空间=schema(在 database 内);裸表名按 search_path / 配置 schema。 */
 export class PgDialect implements Dialect {
+  constructor(private readonly config: { defaultPort: number; execution: ExecutionPolicy }) {}
+
   get driver(): DriverName {
     return 'postgres';
-  }
-
-  readOnlyTxnSQL(): string {
-    return 'BEGIN READ ONLY';
-  }
-
-  needsAutocommitOff(): boolean {
-    return false;
-  }
-
-  statementTimeoutSQL(ms: number): string {
-    return `SET statement_timeout = ${ms}`;
   }
 
   async connect(cfg: ResolvedDatasource): Promise<Conn> {
     const client = new pg.Client({
       host: cfg.host,
-      port: cfg.port ?? DEFAULT_PORT,
+      port: cfg.port ?? this.config.defaultPort,
       user: cfg.user,
       password: cfg.password,
       database: cfg.database,
@@ -121,10 +109,13 @@ export class PgDialect implements Dialect {
     const c = conn as PgConn;
     const start = Date.now();
     let inTxn = false;
+    const { timeout, readOnlyTransaction } = this.config.execution;
     try {
-      await c.raw.query(this.statementTimeoutSQL(opts.timeoutMs));
-      await c.raw.query(this.readOnlyTxnSQL());
-      inTxn = true;
+      if (timeout.unit !== 'none') await c.raw.query(timeout.sql(opts.timeoutMs));
+      if (readOnlyTransaction.strength !== 'account-only') {
+        await c.raw.query(readOnlyTransaction.beginSql);
+        inTxn = true;
+      }
       if (c.defaultSchema) {
         // 设置裸表名默认 schema(search_path);标识符做基本清洗
         await c.raw.query(`SET search_path TO ${quoteIdent(c.defaultSchema)}`);
@@ -140,7 +131,9 @@ export class PgDialect implements Dialect {
     } finally {
       if (inTxn) {
         try {
-          await c.raw.query('ROLLBACK');
+          if (readOnlyTransaction.strength !== 'account-only') {
+            await c.raw.query(readOnlyTransaction.rollbackSql);
+          }
         } catch {
           /* ignore */
         }
@@ -231,9 +224,6 @@ export class PgDialect implements Dialect {
     return { schema: target, table, columns, primaryKey, indexes, comment };
   }
 
-  mapType(raw: unknown): SqlValue {
-    return normalizeValue(raw);
-  }
 }
 
 async function resolvePgSchema(c: PgConn, table: string, schema?: string): Promise<string> {

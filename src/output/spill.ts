@@ -50,7 +50,7 @@ export function writeSpill(ds: string, ndjson: string): string {
 }
 
 /**
- * 机会式 GC(§9b):删落盘目录里超过 maxAgeMs(默认 24h)的 *.ndjson。
+ * 机会式 GC(§9b):删除超过 maxAgeMs(默认 24h)的完成文件和中断遗留临时文件。
  * 按龄删天然避开并发新文件;机制为尽力而为,任何错误吞掉不抛。
  */
 export function gcSpillDir(
@@ -66,7 +66,7 @@ export function gcSpillDir(
     return; // 目录不存在等
   }
   for (const name of entries) {
-    if (!name.endsWith('.ndjson')) continue;
+    if (!name.endsWith('.ndjson') && !name.includes('.ndjson.tmp-')) continue;
     const full = path.join(dir, name);
     try {
       const st = fs.statSync(full);

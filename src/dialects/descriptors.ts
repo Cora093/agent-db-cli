@@ -9,7 +9,10 @@ export type ProtocolProfile = 'mysql' | 'postgres' | 'dm';
 export type IntrospectionCapability = 'full' | 'best-effort';
 export type ReadOnlyTransactionStrength = 'strong' | 'dml-only' | 'account-only';
 export type TimeoutUnit = 'milliseconds' | 'seconds' | 'microseconds' | 'none';
-export type LimitCapability = 'sql-rewrite' | 'sql-rewrite+driver-max-rows';
+export type LimitCapability =
+  | 'sql-rewrite+stream'
+  | 'sql-rewrite+cursor'
+  | 'sql-rewrite+result-set+driver-max-rows';
 
 export interface LexProfile {
   readonly hashComment: boolean;
@@ -174,7 +177,7 @@ const mysqlDescriptor = (
     options: MYSQL_OPTIONS,
     introspection: config.introspection,
     execution: { timeout: config.timeout, readOnlyTransaction: config.readOnlyTransaction },
-    limit: 'sql-rewrite',
+    limit: 'sql-rewrite+stream',
     createDialect: (runtime) => new MysqlFamilyDialect(runtime),
   });
 
@@ -218,7 +221,7 @@ export const DRIVER_DESCRIPTORS = {
       timeout: { unit: 'milliseconds', sql: (ms) => `SET statement_timeout = ${ms}` },
       readOnlyTransaction: explicitTransaction('strong', 'BEGIN READ ONLY'),
     },
-    limit: 'sql-rewrite',
+    limit: 'sql-rewrite+cursor',
     createDialect: (runtime) => new PgDialect(runtime),
   }),
   dm: defineDescriptor({
@@ -232,7 +235,7 @@ export const DRIVER_DESCRIPTORS = {
       timeout: { unit: 'none' },
       readOnlyTransaction: explicitTransaction('strong', 'SET TRANSACTION READ ONLY', false),
     },
-    limit: 'sql-rewrite+driver-max-rows',
+    limit: 'sql-rewrite+result-set+driver-max-rows',
     createDialect: (runtime) => new DmDialect(runtime),
   }),
 } as const satisfies Record<DriverName, DriverDescriptor>;

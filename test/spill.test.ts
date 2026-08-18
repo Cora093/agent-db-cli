@@ -65,15 +65,19 @@ describe('gcSpillDir (§9b 24h 机会式 GC)', () => {
     const now = new Date(2026, 5, 8, 12, 0, 0);
     const old = path.join(dir, 'agent-db-x-old.ndjson');
     const fresh = path.join(dir, 'agent-db-x-fresh.ndjson');
+    const interrupted = path.join(dir, 'agent-db-x-interrupted.ndjson.tmp-123-abc');
     fs.writeFileSync(old, '{}\n');
     fs.writeFileSync(fresh, '{}\n');
+    fs.writeFileSync(interrupted, '{}\n');
     // old 文件 mtime 设为 25h 前
     const oldTime = new Date(now.getTime() - 25 * 3600 * 1000);
     fs.utimesSync(old, oldTime, oldTime);
+    fs.utimesSync(interrupted, oldTime, oldTime);
 
     gcSpillDir(dir, { now, maxAgeMs: 24 * 3600 * 1000 });
 
     expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(interrupted)).toBe(false);
     expect(fs.existsSync(fresh)).toBe(true);
   });
 

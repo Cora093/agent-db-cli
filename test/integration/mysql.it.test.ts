@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { parseDbUrl, standardSuite, gatedDescribe, queryOnce, type ParsedDb } from './helpers.js';
 
@@ -99,10 +102,56 @@ gatedDescribe(ENV)('integration: mysql', () => {
       expect(r.json!.rows.length).toBe(5);
     });
 
+    it('SHOW/EXPLAIN/DESCRIBE 通过行事件有界读取保持可用(#6)', async () => {
+      for (const sql of [
+        'SHOW CREATE TABLE employees',
+        'EXPLAIN SELECT * FROM employees',
+        'DESCRIBE employees',
+      ]) {
+        const r = await q(sql);
+        expect(r.code, sql + ': ' + r.stderr).toBe(0);
+        expect(r.json!.meta.rowCount).toBeGreaterThan(0);
+      }
+    });
+
     it('MySQL 1054 未知列(ROWNUM)→ SQL_SYNTAX / exit 1(L13)', async () => {
       const r = await q('SELECT ROWNUM FROM employees');
       expect(r.code).toBe(1);
       expect(r.errJson!.error.category).toBe('SQL_SYNTAX');
+    });
+  });
+
+  describe('资源预算(#6)', () => {
+    it('500+ 行由行事件截断并停止读取', async () => {
+      const r = await q('SELECT a.id FROM employees a CROSS JOIN employees b CROSS JOIN employees c CROSS JOIN employees d');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.json!.meta.rowCount).toBe(500);
+      expect(r.json!.meta.queryTruncated).toBe(true);
+    });
+
+    it('未知 LIMIT 表达式仍由行事件有界读取', async () => {
+      const r = await q('SELECT id FROM employees LIMIT 1 + 1');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.json!.meta.rowCount).toBeLessThanOrEqual(500);
+    });
+
+    it('超大字段被预算拒绝', async () => {
+      const r = await q("SELECT REPEAT('x', 1048577) AS big");
+      expect(r.code).toBe(1);
+      expect(r.errJson!.error.message).toContain('字段超过');
+    });
+
+    it('streamed JSON --out 是有效完成文件', async () => {
+      const file = path.join(os.tmpdir(), 'agent-db-it-mysql-' + process.pid + '.json');
+      try {
+        const r = await queryOnce(ds, 'it-mysql', 'SELECT id FROM employees ORDER BY id', ['--out', file]);
+        expect(r.code, r.stderr).toBe(0);
+        const out = JSON.parse(fs.readFileSync(file, 'utf8'));
+        expect(out).toMatchObject({
+          contractVersion: '1.0',
+          meta: { rowCount: r.json!.meta.rowCount, queryTruncated: false },
+        });
+      } finally { fs.rmSync(file, { force: true }); }
     });
   });
 });

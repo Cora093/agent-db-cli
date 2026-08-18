@@ -23,6 +23,8 @@ describe('persisted output metadata', () => {
       spillPath: null,
       outPath: '/out/data.json',
       bytes: null,
+      truncationReason: null,
+      resultBytes: null,
     });
     expect(stdout.meta).toEqual({ ...persisted.meta, bytes: Buffer.byteLength(content, 'utf8') });
   });

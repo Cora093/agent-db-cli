@@ -62,7 +62,9 @@ describe('driver descriptor registry', () => {
       readOnlyTransaction: descriptor.execution.readOnlyTransaction.strength,
       timeoutUnit: descriptor.execution.timeout.unit,
       cancellation: 'connection-close',
-      limit: expect.stringMatching(/^(sql-rewrite|sql-rewrite\+driver-max-rows)$/),
+      limit: expect.stringMatching(
+        /^sql-rewrite\+(stream|cursor|result-set\+driver-max-rows)$/,
+      ),
     });
     expect(descriptor.createDialect()).toBeDefined();
   });
@@ -107,7 +109,7 @@ describe('driver descriptor registry', () => {
 
     expect(calls).toEqual([
       ['SET TRANSACTION READ ONLY', [], { autoCommit: false }],
-      ['SELECT 1 LIMIT 11', [], { autoCommit: false, maxRows: 11 }],
+      ['SELECT 1 LIMIT 11', [], { autoCommit: false, maxRows: 11, resultSet: true }],
       ['ROLLBACK', [], { autoCommit: false }],
     ]);
   });
@@ -123,20 +125,54 @@ function fakeRaw(driver: DriverName, calls: unknown[][], dmRollback = true): Rec
     return {
       execute: vi.fn(async (...args: unknown[]) => {
         calls.push(args);
-        return { rows: [], metaData: [] };
+        const options = args[2] as { resultSet?: boolean } | undefined;
+        if (!options?.resultSet) return {};
+        return {
+          metaData: [],
+          resultSet: { getRows: vi.fn(async () => []), close: vi.fn(async () => undefined) },
+        };
       }),
       ...(dmRollback ? { rollback: vi.fn(async () => calls.push(['ROLLBACK'])) } : {}),
     };
   }
   if (driver === 'postgres') {
     return {
-      query: vi.fn(async (...args: unknown[]) => {
-        calls.push(args);
-        return { rows: [], fields: [] };
+      query: vi.fn((...args: unknown[]) => {
+        const sql = queryText(args[0]);
+        calls.push(sql ? [sql] : args);
+        if (args[0] && typeof args[0] === 'object' && 'read' in args[0]) {
+          return {
+            fields: [],
+            read: vi.fn(async () => []),
+            close: vi.fn(async () => undefined),
+          };
+        }
+        return Promise.resolve({ rows: [], fields: [] });
       }),
     };
   }
+  const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+  const eventQuery = {
+    on(event: string, listener: (...args: unknown[]) => void) {
+      const listeners = handlers.get(event) ?? [];
+      listeners.push(listener);
+      handlers.set(event, listeners);
+      return eventQuery;
+    },
+  };
+  const callback = {
+    destroy: vi.fn(),
+    query: vi.fn((options: { sql: string }) => {
+      calls.push([options.sql]);
+      queueMicrotask(() => {
+        for (const listener of handlers.get('fields') ?? []) listener([]);
+        for (const listener of handlers.get('end') ?? []) listener();
+      });
+      return eventQuery;
+    }),
+  };
   return {
+    connection: callback,
     query: vi.fn(async (...args: unknown[]) => {
       calls.push(args);
       return [[], []];

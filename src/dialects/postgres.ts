@@ -1,10 +1,22 @@
 import pg from 'pg';
-import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema, IndexInfo, ConstraintInfo, ForeignKeyInfo } from './types.js';
+import Cursor from 'pg-cursor';
+import type {
+  ColKind,
+  Dialect,
+  Conn,
+  RunOptions,
+  QueryResult,
+  TableInfo,
+  TableSchema,
+  IndexInfo,
+  ConstraintInfo,
+  ForeignKeyInfo,
+} from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
 import type { DriverName } from '../types.js';
 import type { ExecutionPolicy } from './descriptors.js';
 import { AppError } from '../errors.js';
-import { applyLimit, mapRows } from './sql-util.js';
+import { createRowCollector, planLimit } from './sql-util.js';
 import { classifyPgError } from './db-error.js';
 
 export interface PgConn extends Conn {
@@ -121,11 +133,8 @@ export class PgDialect implements Dialect {
         await c.raw.query(`SET search_path TO ${quoteIdent(c.defaultSchema)}`);
       }
 
-      const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
-      const res = await c.raw.query({ text: execSql, rowMode: 'array' });
-      const columns = res.fields.map((f) => f.name);
-
-      return mapRows(res.rows as unknown[][], columns, pgColKinds(res.fields), opts.limit, start);
+      const plan = planLimit(sql, opts.kind, opts.limit + 1);
+      return await readPgRows(c.raw, plan.sql, opts, start);
     } catch (err) {
       throw classifyPgError(err);
     } finally {
@@ -258,6 +267,59 @@ export class PgDialect implements Dialect {
     return { schema: target, table, type: meta.type as string, columns: full(columns), primaryKey: full(constraints.find((x) => x.type === 'PRIMARY KEY')?.columns ?? []), indexes: full(indexes), constraints: full(constraints), foreignKeys: full(foreignKeys), comment: full((meta.comment as string) || null), viewDefinition: full((meta.view_definition as string) || null) };
   }
 
+}
+
+export interface PgRowCursor {
+  readonly fields: { name: string; dataTypeID: number }[];
+  read(count: number): Promise<unknown[][]>;
+  close(): Promise<void>;
+}
+
+export async function collectPgCursor(
+  cursor: PgRowCursor,
+  opts: RunOptions,
+  start: number,
+): Promise<QueryResult> {
+  let collector: ReturnType<typeof createRowCollector> | undefined;
+  try {
+    while (true) {
+      const batch = (await cursor.read(16)) as unknown[][];
+      if (batch.length === 0) break;
+      const fields = cursor.fields;
+      if (!collector) {
+        const columns = fields.map((f) => f.name);
+        collector = createRowCollector(columns, pgColKinds(fields), opts.limit, start, {
+          onRow: opts.onRow,
+          retainRows: opts.retainRows,
+        });
+      }
+      for (const row of batch) {
+        if (!collector.add(row)) {
+          await cursor.close();
+          return collector.finish();
+        }
+      }
+    }
+    if (!collector) {
+      const fields = cursor.fields;
+      collector = createRowCollector(fields.map((field) => field.name), pgColKinds(fields), opts.limit, start);
+    }
+    await cursor.close();
+    return collector.finish();
+  } catch (err) {
+    await cursor.close().catch(() => undefined);
+    throw err;
+  }
+}
+
+async function readPgRows(
+  raw: pg.Client,
+  sql: string,
+  opts: RunOptions,
+  start: number,
+): Promise<QueryResult> {
+  const cursor = raw.query(new Cursor(sql, [], { rowMode: 'array', types: PG_TYPES }));
+  return collectPgCursor(cursor as unknown as PgRowCursor, opts, start);
 }
 
 async function resolvePgSchema(c: PgConn, table: string, schema?: string): Promise<string> {

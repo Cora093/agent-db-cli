@@ -347,8 +347,11 @@ export async function queryOnce(
   datasources: Record<string, Record<string, unknown>>,
   dsId: string,
   sql: string,
+  extraArgs: string[] = [],
 ): Promise<CliResult & { json?: { columns: string[]; rows: unknown[][]; meta: Record<string, unknown> }; errJson?: { error: { category: string; message: string } } }> {
-  const r = await withDatasources(datasources, (runCli) => runCli(['query', '--ds', dsId, sql]));
+  const r = await withDatasources(datasources, (runCli) =>
+    runCli(['query', '--ds', dsId, ...extraArgs, sql]),
+  );
   let json;
   let errJson;
   try {

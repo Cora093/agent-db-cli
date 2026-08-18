@@ -36,6 +36,8 @@ describe('output contract', () => {
       spillPath: null,
       outPath: null,
       bytes: null,
+      truncationReason: null,
+      resultBytes: null,
     });
   });
 
@@ -69,6 +71,8 @@ describe('output contract', () => {
           spillPath: null,
           outPath: null,
           bytes: null,
+          truncationReason: null,
+          resultBytes: null,
         },
       },
       {

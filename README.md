@@ -33,13 +33,13 @@
 
 | driver | protocol | default port | introspection | read-only transaction | timeout unit | cancellation | row limit |
 |---|---|---:|---|---|---|---|---|
-| `mysql` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
-| `doris` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
-| `starrocks` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
-| `tidb` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
-| `oceanbase` | mysql | 3306 | best-effort | DML-only | us | connection-close | SQL rewrite |
-| `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite |
-| `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + maxRows |
+| `mysql` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite + event stream |
+| `doris` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite + event stream |
+| `starrocks` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite + event stream |
+| `tidb` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite + event stream |
+| `oceanbase` | mysql | 3306 | best-effort | DML-only | us | connection-close | SQL rewrite + event stream |
+| `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite + cursor |
+| `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + result set + maxRows |
 
 ## 本地运行
 
@@ -171,7 +171,7 @@ cat query.sql | agent-db query --ds prod-mysql-ro --file -
 --limit <n>              行数限制，范围 1..500，默认 500
 --timeout <sec>          超时时间，默认 30 秒
 -f, --file <path>        SQL 文件；使用 - 表示从 stdin 读取
---out <path>             将完整结果写入文件
+--out <path>             将资源预算内的完整结果写入文件
 --no-spill               不写入 spill 文件，改为内联输出预览
 ```
 
@@ -179,20 +179,24 @@ cat query.sql | agent-db query --ds prod-mysql-ro --file -
 
 结构化输出契约版本为 `1.0`。成功数据只写 stdout，错误、诊断和提示只写 stderr。Commander 参数错误也只输出一个版本化 `BAD_USAGE` JSON；`--help` / `--version` 保持文本成功输出。
 
+- 默认格式是 JSON。小结果保持内联；大结果读取时写入版本化 NDJSON，stdout 只输出预览和 `meta.spillPath`。
+- 流式 NDJSON 第一行是 header，每行是 row，完成后追加带最终 metadata 的 trailer。
+- `--out <path>` 逐行写同目录临时文件，成功完成后原子替换目标；失败不会截断已有文件。JSON/NDJSON 带完成 metadata；CSV 无法自描述字节截断，因此结果字节预算耗尽时导出失败；table 保持原对齐格式并在 8 MiB 预算内缓冲。
+
 默认 JSON 查询结果是列式结构：
 
 ```json
-{"contractVersion":"1.0","ds":"prod-mysql-ro","columns":["id","status"],"rows":[[1,"paid"]],"meta":{"rowCount":1,"deliveredRowCount":1,"ms":8,"queryTruncated":false,"deliveryOmittedRows":0,"mode":"inline","spillPath":null,"outPath":null,"bytes":null}}
+{"contractVersion":"1.0","ds":"prod-mysql-ro","columns":["id","status"],"rows":[[1,"paid"]],"meta":{"rowCount":1,"deliveredRowCount":1,"ms":8,"queryTruncated":false,"deliveryOmittedRows":0,"mode":"inline","spillPath":null,"outPath":null,"bytes":null,"truncationReason":null,"resultBytes":null}}
 ```
 
 错误 JSON 同样带版本：`{"contractVersion":"1.0","error":{"category":"...","message":"..."}}`。
 
 - `rowCount` 是数据库返回给 CLI 的行数；`deliveredRowCount` 是当前 stdout/文件实际携带的行数。
-- `queryTruncated` 只表示查询的行数硬顶丢弃了数据库行；`deliveryOmittedRows` 只表示预览或 `--no-spill` 在交付层省略的行，两者不得混用。
+- `queryTruncated` 表示读取阶段因行数或结果字节预算丢弃了数据库行，`truncationReason` 区分 `row-limit` / `result-bytes`；`deliveryOmittedRows` 只表示预览或 `--no-spill` 在交付层省略的已接受行，两者不得混用。
 - `meta.mode` 为 `inline`、`preview`、`stdout` 或 `out`；路径和字节字段始终存在，不适用时为 `null`。
-- 所有 NDJSON（`list/tables/schema/query` stdout、spill、`--out .ndjson`）使用同一协议：第一行是版本化 `type: "header"`，含命令、原始 `columns`、唯一 `keys` 和 meta；后续是零或多个版本化 `type: "row"` 记录。空结果仍有 header。
+- 所有 NDJSON（`list/tables/schema/query` stdout、spill、`--out .ndjson`）使用同一协议：第一行是版本化 `type: "header"`，含命令、原始 `columns`、唯一 `keys` 和 meta；后续是零或多个版本化 `type: "row"` 记录。流式文件最后追加版本化 `type: "trailer"` 和最终 meta；空结果仍有 header。
 - 重复列标签保留在列式 JSON/CSV 的原位置；NDJSON row 的对象 key 全局唯一，冲突时追加 `#N`。
-- `--out` 文件内 meta 带真实 `outPath`。为避免 JSON 自身字节数递归，文件内 `bytes` 为 `null`；stdout 摘要的 `bytes` 是最终写入内容的 UTF-8 字节数（包含 JSON envelope 或 NDJSON header/rows）。
+- `--out` 文件内 meta 带真实 `outPath`，`bytes` 是最终文件的 UTF-8 字节数（包含 JSON envelope 或 NDJSON header/rows/trailer）；stdout 摘要报告同一个值。
 
 能力发现无需配置或数据库连接：
 
@@ -210,7 +214,7 @@ agent-db capabilities
 1. 使用数据库只读账号。这是真正的安全边界。
 2. 数据库支持时使用只读事务。
 3. 连接前进行 SQL 守卫检查，拒绝多语句、DML、DDL、文件写入和锁读。
-4. 强制资源限制：禁多语句、查询超时、500 行硬上限。MySQL/PostgreSQL 使用服务端语句超时；DM 驱动没有语句级超时或取消 API，因此到期后客户端会关闭并废弃承载查询的连接。
+4. 强制资源限制：禁多语句、查询超时、500 行硬上限、8 MiB 客户端结果预算和 1 MiB 单字段预算。MySQL 使用行事件、PostgreSQL 使用 cursor、DM 使用 `ResultSet.getRows` + `maxRows` 在读取层兜底；预算耗尽会停止底层读取。MySQL/PostgreSQL 另有服务端超时，DM 到期后会强制断开并废弃承载查询的连接。spill/`--out` 逐行写文件且不绕过硬顶，未知 LIMIT/FETCH 形态不会静默退化为无界缓冲。
 
 SQL 守卫用于防误操作，不是完整 SQL 沙箱，也不能替代数据库账号权限。
 

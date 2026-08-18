@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { parseDbUrl, standardSuite, gatedDescribe, queryOnce, type ParsedDb } from './helpers.js';
 
@@ -100,6 +103,12 @@ gatedDescribe(ENV)('integration: postgres', () => {
       expect(r.json!.rows[0][0]).toBe('a;b');
     });
 
+    it('EXPLAIN 通过 cursor 有界读取保持可用(#6)', async () => {
+      const r = await q('EXPLAIN SELECT * FROM employees');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.json!.meta.rowCount).toBeGreaterThan(0);
+    });
+
     it('PG 语义下 5--1 是注释 → 返回 5', async () => {
       const r = await q('SELECT 5--1');
       expect(r.code, r.stderr).toBe(0);
@@ -110,6 +119,42 @@ gatedDescribe(ENV)('integration: postgres', () => {
       const r = await q("SELECT '\\'; DROP TABLE employees; --'");
       expect(r.code).toBe(2);
       expect(r.errJson!.error.category).toBe('BLOCKED_MULTI_STATEMENT');
+    });
+  });
+
+  describe('资源预算(#6)', () => {
+    it('500+ 行由 cursor 截断并关闭 portal', async () => {
+      const r = await q('SELECT generate_series(1, 600) AS n');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.json!.meta.rowCount).toBe(500);
+      expect(r.json!.meta.queryTruncated).toBe(true);
+    });
+
+    it('未知 FETCH 表达式仍由 cursor 有界读取', async () => {
+      const r = await q('SELECT generate_series(1, 10) FETCH FIRST (1 + 1) ROWS ONLY');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.json!.meta.rowCount).toBeLessThanOrEqual(500);
+    });
+
+    it('超大字段被预算拒绝', async () => {
+      const r = await q("SELECT repeat('x', 1048577) AS big");
+      expect(r.code).toBe(1);
+      expect(r.errJson!.error.message).toContain('字段超过');
+    });
+
+    it('streamed NDJSON --out 是版本化完成文件', async () => {
+      const file = path.join(os.tmpdir(), 'agent-db-it-pg-' + process.pid + '.ndjson');
+      try {
+        const r = await queryOnce(ds, 'it-pg', 'SELECT id FROM employees ORDER BY id', ['--out', file]);
+        expect(r.code, r.stderr).toBe(0);
+        const records = fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+        expect(records[0]).toMatchObject({ contractVersion: '1.0', type: 'header' });
+        expect(records.at(-1)).toMatchObject({
+          contractVersion: '1.0',
+          type: 'trailer',
+          meta: { rowCount: r.json!.meta.rowCount, queryTruncated: false },
+        });
+      } finally { fs.rmSync(file, { force: true }); }
     });
   });
 });

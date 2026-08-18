@@ -53,6 +53,27 @@ describe('emitResult — JSON 默认(agent-first)', () => {
     expect(obj.meta.rowCount).toBe(120);
   });
 
+  it('字节预算截断原因与保留字节数进入 metadata', () => {
+    const out = emitResult(
+      {
+        ds: 'd',
+        result: result(1, {
+          truncated: true,
+          truncationReason: 'result-bytes',
+          resultBytes: 42,
+        }),
+        format: 'json',
+        noSpill: false,
+      },
+      noWrites,
+    );
+    expect(JSON.parse(out).meta).toMatchObject({
+      queryTruncated: true,
+      truncationReason: 'result-bytes',
+      resultBytes: 42,
+    });
+  });
+
   it('--no-spill 大结果内联截断到 50 + truncated,不写盘', () => {
     const deps = { writeSpill: vi.fn(() => 'X'), writeOut: vi.fn(() => ({ bytes: 0 })) };
     const out = emitResult({ ds: 'd', result: result(120), format: 'json', noSpill: true }, deps);
@@ -154,6 +175,8 @@ describe('emitResult — --out 写文件', () => {
       spillPath: null,
       outPath: '/o/data.json',
       bytes: null,
+      truncationReason: null,
+      resultBytes: null,
     });
     expect(obj.rows).toHaveLength(3);
   });

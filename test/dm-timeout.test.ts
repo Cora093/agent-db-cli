@@ -12,6 +12,20 @@ interface FakeRaw {
 
 const opts = { kind: 'select' as const, limit: 10, timeoutMs: 25 };
 const pending = <T>() => new Promise<T>(() => undefined);
+function resultSetResult(rows: unknown[][]) {
+  let delivered = false;
+  return {
+    metaData: [{ name: 'ID' }],
+    resultSet: {
+      getRows: vi.fn(async () => {
+        if (delivered) return [];
+        delivered = true;
+        return rows;
+      }),
+      close: vi.fn(async () => undefined),
+    },
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -98,7 +112,7 @@ describe('DmDialect client timeout', () => {
     const raw: FakeRaw = {
       execute: vi.fn()
         .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ rows: [['1']], metaData: [{ name: 'ID' }] }),
+        .mockResolvedValueOnce(resultSetResult([['1']])),
       rollback: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
       socket: { destroy: vi.fn() },
@@ -118,7 +132,7 @@ describe('DmDialect client timeout', () => {
     const raw: FakeRaw = {
       execute: vi.fn()
         .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({ rows: [['1']], metaData: [{ name: 'ID' }] }),
+        .mockResolvedValueOnce(resultSetResult([['1']])),
       rollback: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
       socket: { destroy: vi.fn() },

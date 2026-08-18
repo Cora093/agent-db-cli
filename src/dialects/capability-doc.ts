@@ -5,7 +5,11 @@ const labels = {
   transaction: { strong: 'strong', 'dml-only': 'DML-only', 'account-only': 'account-only' },
   timeout: { milliseconds: 'ms', seconds: 's', microseconds: 'us', none: 'none' },
   cancellation: { 'connection-close': 'connection-close' },
-  limit: { 'sql-rewrite': 'SQL rewrite', 'sql-rewrite+driver-max-rows': 'SQL rewrite + maxRows' },
+  limit: {
+    'sql-rewrite+stream': 'SQL rewrite + event stream',
+    'sql-rewrite+cursor': 'SQL rewrite + cursor',
+    'sql-rewrite+result-set+driver-max-rows': 'SQL rewrite + result set + maxRows',
+  },
 } as const;
 
 /** Stable Markdown used in README and skill docs; tests reject hand-edited capability drift. */

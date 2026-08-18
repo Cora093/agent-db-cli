@@ -16,7 +16,7 @@ import type { ResolvedDatasource } from '../config/types.js';
 import type { DriverName } from '../types.js';
 import type { ExecutionPolicy, IntrospectionCapability } from './descriptors.js';
 import { AppError } from '../errors.js';
-import { applyLimit, mapRows } from './sql-util.js';
+import { createRowCollector, planLimit } from './sql-util.js';
 import { classifyMysqlError } from './db-error.js';
 
 export interface FamilyParams {
@@ -29,6 +29,7 @@ export interface FamilyParams {
 export interface MysqlConn extends Conn {
   raw: mysql.Connection;
   database?: string;
+  discarded: boolean;
 }
 
 /**
@@ -90,14 +91,16 @@ export class MysqlFamilyDialect implements Dialect {
     } catch (err) {
       throw classifyMysqlError(err, 'connect');
     }
-    return {
+    const conn = {
       driver: this.driver,
       raw,
       database: cfg.database,
+      discarded: false,
       close: async () => {
-        await raw.end();
+        if (!conn.discarded && raw.state !== 'disconnected') await raw.end();
       },
     } as MysqlConn;
+    return conn;
   }
 
   async runReadOnly(conn: Conn, sql: string, opts: RunOptions): Promise<QueryResult> {
@@ -110,16 +113,12 @@ export class MysqlFamilyDialect implements Dialect {
         await c.raw.query(readOnlyTransaction.beginSql);
       }
 
-      const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
-      const [rows, fields] = await c.raw.query({ sql: execSql, rowsAsArray: true });
-      const fieldArr = (fields as mysql.FieldPacket[] | undefined) ?? [];
-      const columns = fieldArr.map((f) => f.name);
-
-      return mapRows((rows as unknown[][]) ?? [], columns, colKinds(fieldArr), opts.limit, start);
+      const plan = planLimit(sql, opts.kind, opts.limit + 1);
+      return await readMysqlRows(c.raw, plan.sql, opts, start, () => { c.discarded = true; });
     } catch (err) {
       throw classifyMysqlError(err);
     } finally {
-      if (readOnlyTransaction.strength !== 'account-only') {
+      if (readOnlyTransaction.strength !== 'account-only' && !c.discarded) {
         try {
           await c.raw.query(readOnlyTransaction.rollbackSql);
         } catch {
@@ -263,6 +262,67 @@ export class MysqlFamilyDialect implements Dialect {
     };
   }
 
+}
+
+export interface MysqlEventQuery {
+  on(event: 'fields', listener: (fields: mysql.FieldPacket[]) => void): this;
+  on(event: 'result', listener: (row: unknown[]) => void): this;
+  on(event: 'error', listener: (err: unknown) => void): this;
+  on(event: 'end', listener: () => void): this;
+}
+
+export interface MysqlCallbackConnection {
+  query(opts: { sql: string; rowsAsArray: true; timeout: number }): MysqlEventQuery;
+  destroy(): void;
+}
+
+export async function readMysqlRows(
+  raw: mysql.Connection,
+  sql: string,
+  opts: RunOptions,
+  start: number,
+  onDiscard: () => void = () => undefined,
+): Promise<QueryResult> {
+  const callback = (raw as unknown as { connection: MysqlCallbackConnection }).connection;
+  return await new Promise<QueryResult>((resolve, reject) => {
+    let settled = false;
+    let collector: ReturnType<typeof createRowCollector> | undefined;
+    const finish = (err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else if (collector) resolve(collector.finish());
+      else reject(new Error('MySQL query ended without field metadata'));
+    };
+    const discard = () => {
+      onDiscard();
+      callback.destroy();
+    };
+    const stop = () => {
+      discard();
+      finish();
+    };
+    const query = callback.query({ sql, rowsAsArray: true, timeout: opts.timeoutMs });
+    query.on('fields', (fields) => {
+      const columns = fields.map((f) => f.name);
+      collector = createRowCollector(columns, colKinds(fields), opts.limit, start, {
+        onRow: opts.onRow,
+        retainRows: opts.retainRows,
+      });
+    });
+    query.on('result', (row) => {
+      if (settled) return;
+      try {
+        if (!collector) throw new Error('MySQL row arrived before field metadata');
+        if (!collector.add(row)) stop();
+      } catch (err) {
+        discard();
+        finish(err);
+      }
+    });
+    query.on('error', (err) => finish(err));
+    query.on('end', () => finish());
+  });
 }
 
 async function currentDatabase(raw: mysql.Connection): Promise<string> {

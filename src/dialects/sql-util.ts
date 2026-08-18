@@ -1,6 +1,11 @@
-import type { StatementKind } from '../types.js';
-import type { ColKind, QueryResult } from './types.js';
+import type { SqlValue, StatementKind } from '../types.js';
+import type { ColKind, QueryResult, TruncationReason } from './types.js';
+import { AppError } from '../errors.js';
 import { normalizeValue } from './normalize.js';
+
+/** 查询物化预算。行数顶用于探测 truncated,字节预算保护客户端堆。 */
+export const MAX_RESULT_BYTES = 8 * 1024 * 1024;
+export const MAX_FIELD_BYTES = 1024 * 1024;
 
 /**
  * runReadOnly 共享尾段(R2):截断判定 + 按 ColKind 逐列归一化 + 计时。
@@ -13,10 +18,88 @@ export function mapRows(
   limit: number,
   start: number,
 ): QueryResult {
-  const truncated = rawRows.length > limit;
-  const data = truncated ? rawRows.slice(0, limit) : rawRows;
-  const rows = data.map((r) => r.map((v, i) => normalizeValue(v, kinds[i])));
-  return { columns, rows, truncated, ms: Date.now() - start };
+  const collector = createRowCollector(columns, kinds, limit, start);
+  for (const row of rawRows) {
+    if (!collector.add(row)) break;
+  }
+  return collector.finish();
+}
+
+export interface RowCollector {
+  /** 返回 false 表示预算已耗尽,调用方必须停止底层读取。 */
+  add(rawRow: unknown[]): boolean;
+  finish(): QueryResult;
+}
+
+/**
+ * 在值进入长期数组前逐字段计量。超大字段直接报错;结果总字节耗尽时保留完整行边界并标 truncated。
+ */
+export function createRowCollector(
+  columns: string[],
+  kinds: ColKind[],
+  limit: number,
+  start: number,
+  budget: {
+    maxResultBytes?: number;
+    maxFieldBytes?: number;
+    onRow?: (row: SqlValue[], columns: string[]) => boolean;
+    retainRows?: number;
+  } = {},
+): RowCollector {
+  const maxResultBytes = budget.maxResultBytes ?? MAX_RESULT_BYTES;
+  const maxFieldBytes = budget.maxFieldBytes ?? MAX_FIELD_BYTES;
+  const retainRows = budget.retainRows ?? limit;
+  const rows: SqlValue[][] = [];
+  let acceptedRows = 0;
+  let resultBytes = 0;
+  let truncationReason: TruncationReason | undefined;
+
+  return {
+    add(rawRow) {
+      if (acceptedRows >= limit) {
+        truncationReason = 'row-limit';
+        return false;
+      }
+      const row = rawRow.map((raw, i) => {
+        const value = normalizeValue(raw, kinds[i]);
+        const bytes = valueBytes(value);
+        if (bytes > maxFieldBytes) {
+          throw new AppError('INTERNAL', `查询字段超过 ${maxFieldBytes} 字节预算`, {
+            hint: '用 SUBSTRING/LEFT、显式选择更窄的列,或在 SQL 中聚合后重试',
+          });
+        }
+        return value;
+      });
+      const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8');
+      if (resultBytes + rowBytes > maxResultBytes) {
+        truncationReason = 'result-bytes';
+        return false;
+      }
+      if (budget.onRow && !budget.onRow(row, columns)) {
+        truncationReason = 'result-bytes';
+        return false;
+      }
+      acceptedRows++;
+      if (rows.length < retainRows) rows.push(row);
+      resultBytes += rowBytes;
+      return true;
+    },
+    finish() {
+      return {
+        columns,
+        rows,
+        truncated: truncationReason !== undefined,
+        ...(truncationReason ? { truncationReason } : {}),
+        resultBytes,
+        rowCount: acceptedRows,
+        ms: Date.now() - start,
+      };
+    },
+  };
+}
+
+function valueBytes(value: SqlValue): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
 /**
@@ -35,6 +118,32 @@ export function mapRows(
  *
  * cap 即写入 SQL 的上限值(调用方通常传 limit+1 以判 truncated)。
  */
+export interface LimitPlan {
+  sql: string;
+  serverBounded: boolean;
+  note?: string;
+}
+
+/** 生成 SQL 限行计划。未知 LIMIT/FETCH 形态显式标记为不可靠,不得静默全量缓冲。 */
+export function planLimit(sql: string, kind: StatementKind, cap: number): LimitPlan {
+  if (kind !== 'select' && kind !== 'with') {
+    return { sql, serverBounded: false, note: `${kind.toUpperCase()} 由驱动读取层执行 ${cap} 行硬顶` };
+  }
+  const masked = maskLiterals(sql);
+  const hasLimitSyntax = /\blimit\b/i.test(masked) || /\bfetch\s+(first|next)\b/i.test(masked);
+  const recognizedLimit =
+    /\blimit\s+(?:\d+\s*,\s*)?\d+(?:\s+offset\s+\d+)?\s*$/i.test(masked) ||
+    /\boffset\s+\d+\s+limit\s+\d+\s*$/i.test(masked) ||
+    /\blimit\s+all\s*$/i.test(masked) ||
+    /\bfetch\s+(?:first|next)\s+\d+\s+rows?\s+(?:only|with\s+ties)\s*$/i.test(masked);
+  const unknown = hasLimitSyntax && !recognizedLimit;
+  const bounded = applyLimit(sql, kind, cap);
+  if (unknown) {
+    return { sql, serverBounded: false, note: '无法可靠识别外层 LIMIT/FETCH,改用驱动读取层硬顶' };
+  }
+  return { sql: bounded, serverBounded: true };
+}
+
 export function applyLimit(sql: string, kind: StatementKind, cap: number): string {
   if (kind !== 'select' && kind !== 'with') return sql;
 

@@ -7,6 +7,8 @@ import type { ResolvedDatasource } from '../config/types.js';
  */
 export interface Conn {
   readonly driver: DriverName;
+  /** 协议级取消后连接已被销毁,调用方不得再 rollback/end。 */
+  readonly discarded?: boolean;
   close(): Promise<void>;
 }
 
@@ -17,6 +19,10 @@ export interface RunOptions {
   limit: number;
   /** 服务端超时(毫秒);各策略自换算单位 */
   timeoutMs: number;
+  /** 可选流式消费者。返回 false 时立即停止底层读取。 */
+  onRow?: (row: SqlValue[], columns: string[]) => boolean;
+  /** onRow 存在时仍保留在 QueryResult 中的预览行数。 */
+  retainRows?: number;
 }
 
 /**
@@ -35,12 +41,20 @@ export type ColKind =
   | 'datetime'
   | 'other';
 
+export type TruncationReason = 'row-limit' | 'result-bytes';
+
 export interface QueryResult {
   columns: string[];
-  /** 已按 ColKind 归一化的行;最多 limit 行(若发生截断则恰为 limit 行) */
+  /** 已按 ColKind 归一化且通过字段/结果字节预算的行。 */
   rows: SqlValue[][];
-  /** 是否还有超过 limit 的行被丢弃 */
+  /** 是否还有行因行数或结果字节预算被丢弃。 */
   truncated: boolean;
+  /** 发生截断时的稳定原因;未截断时省略。 */
+  truncationReason?: TruncationReason;
+  /** 已接受规范化 row 数组的 JSON UTF-8 字节和;不含输出格式 envelope/键/换行。 */
+  resultBytes?: number;
+  /** 流式模式下的实际接受行数;缺省等于 rows.length。 */
+  rowCount?: number;
   /** 服务端 + 传输耗时(ms) */
   ms: number;
 }

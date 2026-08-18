@@ -20,6 +20,9 @@ importers:
       pg:
         specifier: ^8.12.0
         version: 8.22.0
+      pg-cursor:
+        specifier: ^2.22.0
+        version: 2.22.0(pg@8.22.0)
       yaml:
         specifier: ^2.5.0
         version: 2.9.0
@@ -30,6 +33,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.0
         version: 8.20.0
+      '@types/pg-cursor':
+        specifier: ^2.7.2
+        version: 2.7.2
       tsx:
         specifier: ^4.19.0
         version: 4.23.1
@@ -477,6 +483,9 @@ packages:
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
+  '@types/pg-cursor@2.7.2':
+    resolution: {integrity: sha512-m3xT8bVFCvx98LuzbvXyuCdT/Hjdd/v8ml4jL4K1QF70Y8clOfCFdgoaEB1FWdcSwcpoFYZTJQaMD9/GQ27efQ==}
+
   '@types/pg@8.20.0':
     resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
 
@@ -638,6 +647,11 @@ packages:
 
   pg-connection-string@2.14.0:
     resolution: {integrity: sha512-XwWDGcLRGCXAR8F/AM5bG7Q+A3Wm2s6QeEjlOKZLlH3UYcguiqCWKyWXVag5TLTIjR7oOJUY8kcADaZgWPyLeg==}
+
+  pg-cursor@2.22.0:
+    resolution: {integrity: sha512-knzXLKqarTjOvb3qDSW0JiGsazmxwEKXrqHfWRte7XUsOYccQRafn3BLnQobWwInkzFJSyOej8y8cQRh2z3kGw==}
+    peerDependencies:
+      pg: ^8
 
   pg-int8@1.0.1:
     resolution: {integrity: sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==}
@@ -1051,6 +1065,11 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/pg-cursor@2.7.2':
+    dependencies:
+      '@types/node': 22.20.1
+      '@types/pg': 8.20.0
+
   '@types/pg@8.20.0':
     dependencies:
       '@types/node': 22.20.1
@@ -1240,6 +1259,10 @@ snapshots:
     optional: true
 
   pg-connection-string@2.14.0: {}
+
+  pg-cursor@2.22.0(pg@8.22.0):
+    dependencies:
+      pg: 8.22.0
 
   pg-int8@1.0.1: {}
 

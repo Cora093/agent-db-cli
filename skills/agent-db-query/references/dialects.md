@@ -20,7 +20,7 @@
 | MySQL 族 / DM | `... LIMIT 100` 或 `LIMIT 20, 100`(offset, count) |
 | PostgreSQL | `... LIMIT 100 OFFSET 20` |
 
-> 工具有 **500 行硬顶**:不管你写多大 LIMIT,最多返回 500 行并标 `meta.queryTruncated=true`。要全量用 `--out`,或用聚合收窄。
+> 工具有 **500 行硬顶**:不管你写多大 LIMIT,最多返回 500 行并标 `meta.queryTruncated=true`。`--out` 也不绕过硬顶;要处理更多数据请分页或用聚合收窄。无法可靠识别的外层 LIMIT/FETCH 会改用驱动读取层限行(MySQL 行事件 / PostgreSQL cursor / DM `ResultSet.getRows` + `maxRows`),不会静默全量缓冲。metadata 的 `resultBytes` 是规范化 row 数组 JSON 字节和；文件 `bytes` 才包含 envelope、键、引号与换行。
 
 ## 标识符引用
 
@@ -47,13 +47,13 @@
 
 | driver | protocol | default port | introspection | read-only transaction | timeout unit | cancellation | row limit |
 |---|---|---:|---|---|---|---|---|
-| `mysql` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
-| `doris` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
-| `starrocks` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite |
-| `tidb` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite |
-| `oceanbase` | mysql | 3306 | best-effort | DML-only | us | connection-close | SQL rewrite |
-| `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite |
-| `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + maxRows |
+| `mysql` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite + event stream |
+| `doris` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite + event stream |
+| `starrocks` | mysql | 3306 | best-effort | account-only | s | connection-close | SQL rewrite + event stream |
+| `tidb` | mysql | 3306 | full | DML-only | ms | connection-close | SQL rewrite + event stream |
+| `oceanbase` | mysql | 3306 | best-effort | DML-only | us | connection-close | SQL rewrite + event stream |
+| `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite + cursor |
+| `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + result set + maxRows |
 
 ## 查询超时
 

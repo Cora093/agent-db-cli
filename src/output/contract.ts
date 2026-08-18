@@ -1,4 +1,5 @@
 import type { SqlValue } from '../types.js';
+import type { TruncationReason } from '../dialects/types.js';
 
 /** Public JSON/NDJSON contract version. Additive fields keep the same major version. */
 export const OUTPUT_CONTRACT_VERSION = '1.0';
@@ -20,6 +21,10 @@ export interface QueryMeta {
   outPath: string | null;
   /** UTF-8 bytes of the referenced spill/out file; null when no file is referenced. */
   bytes: number | null;
+  /** Resource budget that stopped collection, or null when collection completed. */
+  truncationReason: TruncationReason | null;
+  /** UTF-8 bytes of retained normalized row values, excluding delivery framing. */
+  resultBytes: number | null;
 }
 
 export interface QueryMetaInput {
@@ -31,6 +36,8 @@ export interface QueryMetaInput {
   spillPath?: string | null;
   outPath?: string | null;
   bytes?: number | null;
+  truncationReason?: TruncationReason | null;
+  resultBytes?: number | null;
 }
 
 export function versioned<T extends object>(value: T): T & { contractVersion: string } {
@@ -48,6 +55,8 @@ export function buildQueryMeta(input: QueryMetaInput): QueryMeta {
     spillPath: input.spillPath ?? null,
     outPath: input.outPath ?? null,
     bytes: input.bytes ?? null,
+    truncationReason: input.truncationReason ?? null,
+    resultBytes: input.resultBytes ?? null,
   };
 }
 

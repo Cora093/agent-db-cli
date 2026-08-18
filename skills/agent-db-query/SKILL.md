@@ -41,12 +41,12 @@ list → namespaces → tables → schema → query
 - `schema --format table|csv|ndjson` 输出完整 section，不会省略主键、索引和约束。
 - 查询默认就是列式 JSON;**给人看时**才加 `--format table`;要拖进 Excel 才 `--format csv`。
 - 结构化契约版本为 `1.0`；成功和错误 JSON 顶层都有 `contractVersion`。stdout 只含成功数据，stderr 只含错误/诊断/提示。
-- 默认列式 JSON 的 `meta` 固定含 `rowCount`、`deliveredRowCount`、`ms`、`queryTruncated`、`deliveryOmittedRows`、`mode`、路径和 `bytes`。
-- `queryTruncated` 只代表数据库查询硬顶；`deliveryOmittedRows` 代表 preview/`--no-spill` 交付省略。不要混用。
+- 默认列式 JSON 的 `meta` 固定含 `rowCount`、`deliveredRowCount`、`ms`、`queryTruncated`、`truncationReason`、`resultBytes`、`deliveryOmittedRows`、`mode`、路径和 `bytes`。
+- `queryTruncated` 代表读取因行数或结果字节预算停止；`deliveryOmittedRows` 代表 preview/`--no-spill` 交付省略。不要混用。
 - 错误（包括 Commander 参数错误）是单个版本化 JSON，只在 stderr；help/version 是 stdout 文本成功。
-- 所有 NDJSON 第一行都是版本化 `type: header`（空结果也有），后续是版本化 `type: row`，数据在 `row` 字段。spill 和 `.ndjson` 导出同协议。
+- 所有 NDJSON 第一行都是版本化 `type: header`（空结果也有），后续是版本化 `type: row`，数据在 `row` 字段；流式文件最后有 `type: trailer` 完成 metadata。
 - SQL 有重复列名时，列式 JSON/CSV 按位置保留；NDJSON `keys` 全局唯一。优先给重复列显式 alias。
-- `.json`/`.ndjson` 文件内 `outPath` 真实，`bytes=null`；stdout 摘要的 `bytes` 是完整文件 UTF-8 字节数。
+- `.json`/`.ndjson` 文件内路径和 `bytes` 是最终值；stdout 摘要报告相同的完整文件 UTF-8 字节数。
 - 0.1.x 迁移：`truncated` 改读 `queryTruncated`；NDJSON 改为 header/row 分帧。
 
 ## 写 SQL:简单用位置参数,复杂写临时文件
@@ -68,7 +68,8 @@ list → namespaces → tables → schema → query
 
 ## 大结果:自动落盘,别灌进上下文
 
-- 工具**永不返回超过 500 行**;超阈值会**自动落盘为 NDJSON**,stdout 只给前 50 行预览 + `meta.spillPath`。
+- 工具**永不返回超过 500 行**;客户端还限制结果为 8 MiB、单字段为 1 MiB。超字段预算会报错,总字节预算耗尽会按完整行截断并标 `meta.queryTruncated=true` / `meta.truncationReason="result-bytes"`。
+- 小 JSON 结果仍内联;超阈值时读取过程写版本化 NDJSON(header + row 对象 + trailer metadata),stdout 只给前 50 行预览 + `meta.spillPath`。spill 和 `--out` 都先写临时文件再原子发布;失败保留旧文件。CSV 无法自描述字节截断,因此字节预算耗尽时导出失败;table 保持原对齐格式并在 8 MiB 内缓冲。
 - 别把大结果灌进上下文:用 `Read(offset/limit)` / `Grep` 切 `spillPath` 文件,或**缩小 SQL 重查**。
 - **聚合/计数用 SQL(`COUNT`/`SUM`/`GROUP BY`),别在客户端数行**——客户端只看到截断后的 ≤500 行,自己数会错。
 - 要导出给人:`--out path.csv`(持久文件,按扩展名推断格式)。

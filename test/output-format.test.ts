@@ -111,6 +111,8 @@ describe('buildInlineJson (§9a)', () => {
         spillPath: null,
         outPath: null,
         bytes: null,
+        truncationReason: null,
+        resultBytes: null,
       },
     });
   });
@@ -140,6 +142,8 @@ describe('buildSpillJson (§9b)', () => {
       spillPath: '/tmp/agent-db-cli/x.ndjson',
       outPath: null,
       bytes: 327680,
+      truncationReason: null,
+      resultBytes: null,
     });
   });
 });

@@ -3,7 +3,7 @@ import type { ResolvedDatasource } from '../config/types.js';
 import type { DriverName } from '../types.js';
 import type { ExecutionPolicy } from './descriptors.js';
 import { AppError } from '../errors.js';
-import { applyLimit, mapRows } from './sql-util.js';
+import { createRowCollector, planLimit } from './sql-util.js';
 import { classifyDmError } from './db-error.js';
 
 const FALLBACK_CLOSE_TIMEOUT_MS = 100;
@@ -28,12 +28,22 @@ interface DmRawConnection {
   execute(
     sql: string,
     binds?: unknown[],
-    opts?: { autoCommit?: boolean; outFormat?: unknown; maxRows?: number },
-  ): Promise<{ rows?: unknown[][]; metaData?: DmColumnMeta[] }>;
+    opts?: {
+      autoCommit?: boolean;
+      outFormat?: unknown;
+      maxRows?: number;
+      resultSet?: boolean;
+    },
+  ): Promise<{ rows?: unknown[][]; metaData?: DmColumnMeta[]; resultSet?: DmResultSet }>;
   rollback?(): Promise<void>;
   close(): Promise<void>;
   socket?: DmSocket;
   conn_prop_socketTimeout?: number;
+}
+
+export interface DmResultSet {
+  getRows(count: number): Promise<unknown[][]>;
+  close(): Promise<void>;
 }
 
 interface DmColumnMeta {
@@ -160,21 +170,20 @@ export class DmDialect implements Dialect {
       throw new AppError('INTERNAL', 'DM descriptor 缺少只读事务策略');
     }
     try {
-      const result = await runWithTimeout(c, opts.timeoutMs, async () => {
+      return await runWithTimeout(c, opts.timeoutMs, async () => {
         await c.raw.execute(transaction.beginSql, [], { autoCommit: transaction.autoCommit });
 
-        const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
-        // maxRows:驱动级限行兜底(C)。applyLimit 对 TOP/ROWNUM 等形态跳过改写时,
-        // 仍由 dmdb 在取数层封顶,杜绝全量缓冲 OOM。
-        return c.raw.execute(execSql, [], {
+        const plan = planLimit(sql, opts.kind, opts.limit + 1);
+        // maxRows bounds every statement kind; resultSet avoids materializing all rows in dmdb.
+        const result = await c.raw.execute(plan.sql, [], {
           autoCommit: transaction.autoCommit,
           maxRows: opts.limit + 1,
+          resultSet: true,
         });
+        const meta = result.metaData ?? [];
+        if (!result.resultSet) throw new Error('DM query did not return a result set');
+        return collectDmResultSet(result.resultSet, meta, opts, start);
       });
-      const meta = result.metaData ?? [];
-      const columns = meta.map((m) => m.name);
-
-      return mapRows((result.rows ?? []) as unknown[][], columns, dmColKinds(meta), opts.limit, start);
     } catch (err) {
       if (err instanceof AppError && err.category === 'TIMEOUT') throw err;
       throw classifyDmError(err);
@@ -374,6 +383,31 @@ async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promi
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+export async function collectDmResultSet(
+  resultSet: DmResultSet,
+  meta: DmColumnMeta[],
+  opts: RunOptions,
+  start: number,
+): Promise<QueryResult> {
+  const columns = meta.map((m) => m.name);
+  const collector = createRowCollector(columns, dmColKinds(meta), opts.limit, start, {
+    onRow: opts.onRow,
+    retainRows: opts.retainRows,
+  });
+  try {
+    while (true) {
+      const batch = await resultSet.getRows(16);
+      if (batch.length === 0) break;
+      for (const row of batch) {
+        if (!collector.add(row)) return collector.finish();
+      }
+    }
+    return collector.finish();
+  } finally {
+    await resultSet.close();
   }
 }
 

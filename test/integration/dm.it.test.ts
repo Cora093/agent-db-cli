@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { parseDbUrl, standardSuite, gatedDescribe, queryOnce, type ParsedDb } from './helpers.js';
+import {
+  parseDbUrl,
+  standardSuite,
+  gatedDescribe,
+  queryOnce,
+  withDatasources,
+  type ParsedDb,
+} from './helpers.js';
 
 /**
  * 达梦 DM 集成测试。门控 AGENT_DB_CLI_IT_DM=dm://SYSDBA:pass@host:5236。
@@ -35,6 +42,35 @@ gatedDescribe(ENV)('integration: dm', () => {
 
   const ds = { 'it-dm': datasource };
   const q = (sql: string) => queryOnce(ds, 'it-dm', sql);
+
+  it('长查询超过 --timeout 后关闭连接并返回 TIMEOUT / exit 3', async () => {
+    const started = Date.now();
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const timeoutQuery = withDatasources(ds, (runCli) =>
+      runCli([
+        'query',
+        '--ds',
+        'it-dm',
+        'SELECT COUNT(*) FROM SYSOBJECTS A, SYSOBJECTS B, SYSOBJECTS C',
+        '--timeout',
+        '1',
+      ]),
+    );
+    const watchdogFailure = new Promise<never>((_, reject) => {
+      watchdog = setTimeout(() => reject(new Error('DM timeout watchdog exceeded 5s')), 5000);
+    });
+
+    let r;
+    try {
+      r = await Promise.race([timeoutQuery, watchdogFailure]);
+    } finally {
+      if (watchdog !== undefined) clearTimeout(watchdog);
+    }
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.stdout).toBe('');
+    expect(JSON.parse(r.stderr.trim()).error.category).toBe('TIMEOUT');
+  });
 
   describe('类型契约(A3/B1,dm-183 真机)', () => {
     it('数值一律文本字符串(dmdb 不透出列类型,精度优先)', async () => {

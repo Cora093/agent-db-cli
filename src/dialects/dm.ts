@@ -6,14 +6,24 @@ import { AppError } from '../errors.js';
 import { applyLimit, mapRows } from './sql-util.js';
 import { classifyDmError } from './db-error.js';
 
+const FALLBACK_CLOSE_TIMEOUT_MS = 100;
+
+type DmConnState = 'open' | 'closing' | 'closed' | 'discarded';
+
 export interface DmConn extends Conn {
   raw: DmRawConnection;
   defaultSchema?: string;
   user: string;
+  state(): DmConnState;
+  discard(): Promise<void>;
 }
 
 // dmdb(达梦官方)的最小结构假设。API 形状借鉴 node-oracledb(getConnection/execute/OUT_FORMAT_ARRAY),
 // 但实现是纯 JS(net socket 自实现协议),非原生 addon——无需预编译二进制/客户端库。bind 风格等细节仍待 §14 真机校正。
+interface DmSocket {
+  destroy(): void;
+}
+
 interface DmRawConnection {
   execute(
     sql: string,
@@ -22,6 +32,8 @@ interface DmRawConnection {
   ): Promise<{ rows?: unknown[][]; metaData?: DmColumnMeta[] }>;
   rollback?(): Promise<void>;
   close(): Promise<void>;
+  socket?: DmSocket;
+  conn_prop_socketTimeout?: number;
 }
 
 interface DmColumnMeta {
@@ -137,15 +149,7 @@ export class DmDialect implements Dialect {
         throw classifyDmError(err, 'connect');
       }
     }
-    return {
-      driver: 'dm',
-      raw,
-      defaultSchema: cfg.schema,
-      user: cfg.user,
-      close: async () => {
-        await raw.close();
-      },
-    } as DmConn;
+    return createDmConn(raw, cfg.schema, cfg.user);
   }
 
   async runReadOnly(conn: Conn, sql: string, opts: RunOptions): Promise<QueryResult> {
@@ -156,27 +160,32 @@ export class DmDialect implements Dialect {
       throw new AppError('INTERNAL', 'DM descriptor 缺少只读事务策略');
     }
     try {
-      await c.raw.execute(transaction.beginSql, [], { autoCommit: transaction.autoCommit });
+      const result = await runWithTimeout(c, opts.timeoutMs, async () => {
+        await c.raw.execute(transaction.beginSql, [], { autoCommit: transaction.autoCommit });
 
-      const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
-      // maxRows:驱动级限行兜底(C)。applyLimit 对 TOP/ROWNUM 等形态跳过改写时,
-      // 仍由 dmdb 在取数层封顶,杜绝全量缓冲 OOM。
-      const result = await c.raw.execute(execSql, [], {
-        autoCommit: transaction.autoCommit,
-        maxRows: opts.limit + 1,
+        const execSql = applyLimit(sql, opts.kind, opts.limit + 1);
+        // maxRows:驱动级限行兜底(C)。applyLimit 对 TOP/ROWNUM 等形态跳过改写时,
+        // 仍由 dmdb 在取数层封顶,杜绝全量缓冲 OOM。
+        return c.raw.execute(execSql, [], {
+          autoCommit: transaction.autoCommit,
+          maxRows: opts.limit + 1,
+        });
       });
       const meta = result.metaData ?? [];
       const columns = meta.map((m) => m.name);
 
       return mapRows((result.rows ?? []) as unknown[][], columns, dmColKinds(meta), opts.limit, start);
     } catch (err) {
+      if (err instanceof AppError && err.category === 'TIMEOUT') throw err;
       throw classifyDmError(err);
     } finally {
-      try {
-        if (c.raw.rollback) await c.raw.rollback();
-        else await c.raw.execute(transaction.rollbackSql, [], { autoCommit: transaction.autoCommit });
-      } catch {
-        /* ignore */
+      if (c.state() === 'open') {
+        try {
+          if (c.raw.rollback) await c.raw.rollback();
+          else await c.raw.execute(transaction.rollbackSql, [], { autoCommit: transaction.autoCommit });
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
@@ -266,6 +275,106 @@ export class DmDialect implements Dialect {
     };
   }
 
+}
+
+/**
+ * Isolates dmdb 1.0.49630 internals used for cancellation. Connection.do_close() first awaits
+ * rollback, so it cannot enforce a deadline. Each protocol message snapshots
+ * conn_prop_socketTimeout, while raw.socket.destroy() immediately aborts the transport.
+ */
+const dmTransport = {
+  configureMessageTimeout(raw: DmRawConnection, timeoutMs: number): void {
+    raw.conn_prop_socketTimeout = timeoutMs;
+  },
+  destroy(raw: DmRawConnection): boolean {
+    if (!raw.socket || typeof raw.socket.destroy !== 'function') return false;
+    raw.socket.destroy();
+    return true;
+  },
+};
+
+export function createDmConn(raw: DmRawConnection, defaultSchema?: string, user = 'TEST'): Conn {
+  let state: DmConnState = 'open';
+  const conn: DmConn = {
+    driver: 'dm',
+    raw,
+    defaultSchema,
+    user,
+    state: () => state,
+    discard: async () => {
+      if (state === 'discarded' || state === 'closed') return;
+      state = 'discarded';
+      try {
+        if (dmTransport.destroy(raw)) return;
+      } catch {
+        // The connection remains discarded; use the bounded fallback below.
+      }
+      // Unknown dmdb shape: graceful close is only best-effort and strictly bounded.
+      await settleWithin(Promise.resolve().then(() => raw.close()), FALLBACK_CLOSE_TIMEOUT_MS);
+    },
+    close: async () => {
+      if (state === 'discarded' || state === 'closed' || state === 'closing') return;
+      state = 'closing';
+      try {
+        await raw.close();
+        state = 'closed';
+      } catch (err) {
+        state = 'open';
+        throw err;
+      }
+    },
+  };
+  return conn;
+}
+
+async function runWithTimeout<T>(conn: DmConn, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
+  dmTransport.configureMessageTimeout(conn.raw, timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  let signalTimeout!: () => void;
+  const timeoutSignal = new Promise<void>((resolve) => {
+    signalTimeout = resolve;
+  });
+  const settledOperation = Promise.resolve().then(operation).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+
+  timer = setTimeout(() => {
+    timedOut = true;
+    void conn.discard();
+    signalTimeout();
+  }, timeoutMs);
+
+  try {
+    const outcome = await Promise.race([settledOperation, timeoutSignal.then(() => undefined)]);
+    if (outcome === undefined || timedOut) {
+      // discard() is bounded when socket internals are unavailable; never await the operation.
+      await conn.discard();
+      throw new AppError('TIMEOUT', '查询超时被中断', {
+        hint: '加 WHERE/LIMIT 收窄,或调大 --timeout',
+      });
+    }
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  const handled = promise.then(() => undefined, () => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      handled,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** 标识符白名单校验(DM bind 风格不确定时用于安全插值)。 */

@@ -7,6 +7,7 @@ import {
   isDriverName,
 } from '../src/dialects/descriptors.js';
 import { renderDriverCapabilityTable } from '../src/dialects/capability-doc.js';
+import { createDmConn } from '../src/dialects/dm.js';
 import { getDialect } from '../src/dialects/registry.js';
 import type { Conn } from '../src/dialects/types.js';
 import type { DriverName } from '../src/types.js';
@@ -75,7 +76,9 @@ describe('driver descriptor registry', () => {
     const calls: unknown[][] = [];
     const dialect = getDialect(name);
     const raw = fakeRaw(name, calls);
-    const conn = { driver: name, raw, close: vi.fn() } as unknown as Conn;
+    const conn = name === 'dm'
+      ? createDmConn(raw as never)
+      : ({ driver: name, raw, close: vi.fn() } as unknown as Conn);
 
     await dialect.runReadOnly(conn, 'SELECT 1', { kind: 'select', limit: 10, timeoutMs: 1500 });
 
@@ -98,7 +101,7 @@ describe('driver descriptor registry', () => {
     const calls: unknown[][] = [];
     const dialect = getDialect('dm');
     const raw = fakeRaw('dm', calls, false);
-    const conn = { driver: 'dm', raw, close: vi.fn() } as unknown as Conn;
+    const conn = createDmConn(raw as never);
 
     await dialect.runReadOnly(conn, 'SELECT 1', { kind: 'select', limit: 10, timeoutMs: 1500 });
 

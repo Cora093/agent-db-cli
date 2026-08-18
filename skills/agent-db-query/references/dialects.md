@@ -55,6 +55,11 @@
 | `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite |
 | `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + maxRows |
 
+## 查询超时
+
+- **MySQL 协议族 / PostgreSQL**:通过数据库会话的语句级超时中断查询。
+- **达梦 DM**:dmdb 1.x 不提供语句级超时 SQL 或公开的 query cancel API；超过 `--timeout` 后，agent-db 会强制断开并废弃承载查询的专用连接，以中断数据库操作。错误仍为 `TIMEOUT`（退出码 3）。
+
 ### 自省能力细节
 
 | 引擎 | `schema` 命令 |

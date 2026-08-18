@@ -102,6 +102,12 @@ datasources:
 agent-db list
 ```
 
+列出可见 schema/namespace：
+
+```bash
+agent-db namespaces --ds prod-mysql-ro
+```
+
 查看表：
 
 ```bash
@@ -116,6 +122,8 @@ agent-db schema --ds prod-mysql-ro --table orders
 agent-db schema --ds analytics-pg-ro --schema sales --table orders
 ```
 
+`schema` 的 JSON 中，`columns`、`primaryKey`、`indexes`、`constraints`、`foreignKeys`、`comment` 和 `viewDefinition` 都是 `{ status, data, detail? }`。`status` 为 `full` 时空数组表示确定不存在；`best-effort` 或 `unsupported` 时不能把空数组解释为不存在。表格使用带名称的多 section 输出；CSV 使用统一的 `section,field1,...` 结构，每行列数一致，普通 CSV 解析器可直接读取，不会静默省略键、索引或约束。
+
 执行查询：
 
 ```bash
@@ -128,6 +136,18 @@ agent-db query --ds prod-mysql-ro "SELECT id, status FROM orders ORDER BY id DES
 agent-db query --ds prod-mysql-ro --file ./query.sql
 cat query.sql | agent-db query --ds prod-mysql-ro --file -
 ```
+
+## 元数据自省能力
+
+| driver | namespace | columns/comments | PK/index/constraints/FK | view definition |
+|---|---|---|---|---|
+| `mysql` | full | full | full | full |
+| `postgres` | full | full | full | full |
+| `dm` | best-effort（从当前账号可见对象推导） | full columns；其余 best-effort | best-effort | best-effort |
+| `tidb` | full | full | full | full |
+| `doris` / `starrocks` / `oceanbase` | full | full | best-effort | best-effort |
+
+能力状态由命令输出携带；MySQL 协议兼容引擎的 `information_schema` 实现随版本和部署配置变化，因此 best-effort 项不能推断为确定不存在。
 
 ## 参数
 

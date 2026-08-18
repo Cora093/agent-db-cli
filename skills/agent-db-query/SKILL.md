@@ -18,13 +18,14 @@ description: >-
 不确定表/列时,先发现再查(已知 schema 可跳过):
 
 ```
-list → tables → schema → query
+list → namespaces → tables → schema → query
 ```
 
 1. `agent-db list` — 看有哪些数据源(`id` / `label` / `driver` / `host` / `database`)。
-2. `agent-db tables --ds <id> [--like '%order%']` — 看某源有哪些表(带 schema 限定)。
-3. `agent-db schema --ds <id> --table <name> [--schema <s>]` — 看单表结构。
-4. `agent-db query --ds <id> "<SELECT ...>"` — 执行查询。
+2. `agent-db namespaces --ds <id>` — 看可见 schema/namespace。
+3. `agent-db tables --ds <id> [--like '%order%']` — 看某源有哪些表(带 schema 限定)。
+4. `agent-db schema --ds <id> --table <name> [--schema <s>]` — 看单表结构。
+5. `agent-db query --ds <id> "<SELECT ...>"` — 执行查询。
 
 ## 选源:显式 `--ds`,无当前源状态
 
@@ -35,6 +36,8 @@ list → tables → schema → query
 
 ## 输出:默认带 `--format json`
 
+- `schema` JSON 的各元数据字段包含 `status` 和 `data`；只有 `full` 状态的空数组才表示确定不存在。
+- `schema --format table|csv` 输出多 section，不会省略主键、索引和约束。
 - 查询默认就是列式 JSON;**给人看时**才加 `--format table`;要拖进 Excel 才 `--format csv`。
 - 成功结果形如 `{ "ds", "columns", "rows", "meta": { "rowCount", "ms", "truncated", "spillPath" } }`。
 - 错误形如 `{ "error": { "category", "message", "hint" } }`,**只在 stderr**;数据通道(stdout)不被污染。

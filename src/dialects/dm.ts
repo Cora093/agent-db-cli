@@ -6,7 +6,7 @@ import { AppError } from '../errors.js';
 import { applyLimit, mapRows } from './sql-util.js';
 import { classifyDmError } from './db-error.js';
 
-interface DmConn extends Conn {
+export interface DmConn extends Conn {
   raw: DmRawConnection;
   defaultSchema?: string;
   user: string;
@@ -181,6 +181,25 @@ export class DmDialect implements Dialect {
     }
   }
 
+  async listNamespaces(conn: Conn) {
+    const c = conn as DmConn;
+    const res = await c.raw.execute(
+      'SELECT DISTINCT OWNER FROM ALL_OBJECTS ORDER BY OWNER',
+      [],
+      { autoCommit: false },
+    );
+    const meta = (res.metaData ?? []).map((m) => m.name.toUpperCase());
+    const i = meta.indexOf('OWNER');
+    return {
+      status: 'best-effort' as const,
+      detail: 'namespaces are derived from objects visible to the current user',
+      data: (res.rows ?? []).map((r) => {
+        const name = r[i] as string;
+        return { name, system: name === 'SYS' || name === 'SYSTEM' || name.startsWith('SYS') };
+      }),
+    };
+  }
+
   async listTables(conn: Conn, like?: string): Promise<TableInfo[]> {
     const c = conn as DmConn;
     const owner = (c.defaultSchema ?? c.user).toUpperCase();
@@ -218,14 +237,32 @@ export class DmDialect implements Dialect {
       default: (r[idx('DATA_DEFAULT')] as string) ?? null,
     }));
 
+    const objectRes = await c.raw.execute(
+      `SELECT o.OBJECT_TYPE, v.TEXT AS VIEW_DEFINITION
+       FROM ALL_OBJECTS o LEFT JOIN ALL_VIEWS v ON v.OWNER=o.OWNER AND v.VIEW_NAME=o.OBJECT_NAME
+       WHERE o.OWNER='${sqlStr(owner)}' AND o.OBJECT_NAME='${sqlStr(t)}'
+         AND o.OBJECT_TYPE IN ('TABLE','VIEW')`,
+      [],
+      { autoCommit: false },
+    );
+    const objectMeta = (objectRes.metaData ?? []).map((m) => m.name.toUpperCase());
+    const objectRow = objectRes.rows?.[0];
+    const objectType = objectRow?.[objectMeta.indexOf('OBJECT_TYPE')] as string | undefined;
+    const viewDefinition = objectRow?.[objectMeta.indexOf('VIEW_DEFINITION')] as string | null | undefined;
+
     return {
       schema: owner,
       table,
-      columns,
-      primaryKey: [],
-      indexes: 'N/A',
-      note: '主键/索引 best-effort 未自省(§14 spike);见达梦数据字典或 SQL: ' +
-        'SELECT * FROM ALL_CONSTRAINTS / ALL_INDEXES',
+      type: objectType === 'TABLE' ? 'BASE TABLE' : objectType === 'VIEW' ? 'VIEW' : 'UNKNOWN',
+      columns: { status: 'full', data: columns },
+      primaryKey: { status: 'best-effort', data: [], detail: 'DM catalog introspection is not available in this build' },
+      indexes: { status: 'best-effort', data: [], detail: 'DM catalog introspection is not available in this build' },
+      constraints: { status: 'best-effort', data: [], detail: 'DM catalog introspection is not available in this build' },
+      foreignKeys: { status: 'best-effort', data: [], detail: 'DM catalog introspection is not available in this build' },
+      comment: { status: 'best-effort', data: null, detail: 'DM catalog introspection is not available in this build' },
+      viewDefinition: objectType === 'VIEW'
+        ? { status: 'best-effort', data: viewDefinition ?? null, detail: 'view text is returned when visible in ALL_VIEWS' }
+        : { status: objectType === 'TABLE' ? 'full' : 'best-effort', data: null, detail: objectType ? undefined : 'object type is unavailable' },
     };
   }
 

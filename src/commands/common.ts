@@ -4,16 +4,42 @@ import { AppError } from '../errors.js';
 import { formatCsv, formatTable } from '../output/format.js';
 
 /** list/tables/schema 的统一视图:json 用结构对象,table/csv 用列+行。 */
-export interface View {
-  json: unknown;
+export interface ViewSection {
+  name: string;
   columns: string[];
   rows: SqlValue[][];
 }
 
+export interface View {
+  json: unknown;
+  columns: string[];
+  rows: SqlValue[][];
+  sections?: ViewSection[];
+}
+
 export function renderView(view: View, format: OutputFormat): string {
   if (format === 'json') return JSON.stringify(view.json);
-  if (format === 'csv') return formatCsv(view.columns, view.rows);
-  return formatTable(view.columns, view.rows); // table:无脚注
+  if (format === 'csv' && !view.sections) return formatCsv(view.columns, view.rows);
+  const sections = view.sections ?? [{ name: '', columns: view.columns, rows: view.rows }];
+  if (format === 'csv') {
+    const width = Math.max(0, ...sections.map((section) => section.columns.length));
+    const columns = ['section', ...Array.from({ length: width }, (_, i) => `field${i + 1}`)];
+    const rows = sections.flatMap((section) => [
+      [section.name, ...section.columns, ...Array(width - section.columns.length).fill(null)],
+      ...section.rows.map((row) => [
+        section.name,
+        ...row,
+        ...Array(width - row.length).fill(null),
+      ]),
+    ]);
+    return formatCsv(columns, rows);
+  }
+  return sections
+    .map((section) => {
+      const body = formatTable(section.columns, section.rows);
+      return section.name ? `[${section.name}]\n${body}` : body;
+    })
+    .join('\n\n');
 }
 
 /** 选数据源(§8):未命中报错并列出所有合法 id,便于 Agent 自纠。 */

@@ -6,6 +6,7 @@
 
 ```bash
 agent-db list
+agent-db namespaces --ds prod-mysql-ro
 agent-db tables --ds prod-mysql-ro --like '%order%'
 agent-db schema --ds prod-mysql-ro --table orders
 agent-db schema --ds analytics-pg-ro --table sales.orders   # schema.table 糖

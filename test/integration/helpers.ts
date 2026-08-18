@@ -133,6 +133,16 @@ export function standardSuite(spec: SuiteSpec): void {
     });
   });
 
+  it('namespaces 列出夹具 namespace', async () => {
+    await withDatasources(ds, async (runCli) => {
+      const r = await runCli(['namespaces', '--ds', spec.dsId]);
+      expect(r.code, r.stderr).toBe(0);
+      const j = JSON.parse(r.stdout);
+      expect(['full', 'best-effort']).toContain(j.namespaces.status);
+      expect(j.namespaces.data.length).toBeGreaterThan(0);
+    });
+  });
+
   it('tables --like 命中 employees', async () => {
     await withDatasources(ds, async (runCli) => {
       const r = await runCli(['tables', '--ds', spec.dsId, '--like', spec.empLike]);
@@ -149,7 +159,7 @@ export function standardSuite(spec: SuiteSpec): void {
       expect(r.code, r.stderr).toBe(0);
       const j = JSON.parse(r.stdout);
       const byName = new Map<string, { type: string }>(
-        j.columns.map((c: { name: string; type: string }) => [lower(c.name), c]),
+        j.columns.data.map((c: { name: string; type: string }) => [lower(c.name), c]),
       );
       for (const col of ['id', 'name', 'salary', 'hired_at', 'is_active', 'dept_id']) {
         expect(byName.has(col), `缺列 ${col}`).toBe(true);
@@ -157,10 +167,16 @@ export function standardSuite(spec: SuiteSpec): void {
       expect(lower(byName.get('salary')!.type)).toContain(spec.salaryTypeContains);
 
       if (spec.fullIntrospection) {
-        expect(j.primaryKey.map(lower)).toContain('id');
-        expect(j.indexes).not.toBe('N/A');
+        expect(j.primaryKey.status).toBe('full');
+        expect(j.primaryKey.data.map(lower)).toContain('id');
+        expect(j.indexes.status).toBe('full');
+        expect(['full', 'best-effort']).toContain(j.constraints.status);
+        expect(j.foreignKeys.status).toBe('full');
+        expect(j.comment.status).toBe('full');
+        expect(j.viewDefinition.status).toBe('full');
       } else {
-        expect(j.indexes).toBe('N/A');
+        expect(j.indexes.status).toBe('best-effort');
+        expect(j.primaryKey.status).toBe('best-effort');
       }
     });
   });

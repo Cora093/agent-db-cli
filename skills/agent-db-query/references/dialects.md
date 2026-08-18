@@ -55,6 +55,16 @@
 | `postgres` | postgres | 5432 | full | strong | ms | connection-close | SQL rewrite |
 | `dm` | dm | 5236 | best-effort | strong | none | connection-close | SQL rewrite + maxRows |
 
+### 自省能力细节
+
+| 引擎 | `schema` 命令 |
+|---|---|
+| MySQL / PostgreSQL | **full**:namespace、列/注释、主键、索引、约束、外键、视图定义 |
+| DM | namespace 为可见对象推导的 **best-effort**，列为 **full**；键、约束、注释、视图定义为 **best-effort** |
+| TiDB | MySQL `information_schema` 路径为 **full** |
+| Doris / StarRocks / OceanBase | 列为 **full**；键、约束、外键、视图定义为 **best-effort** |
+
+- JSON 每个元数据字段带 `{ status, data, detail? }`；仅 `full` 的空数组表示确定不存在。
 - 对 best-effort 引擎想看键/分布,直接 `query --ds <id> "SHOW CREATE TABLE <t>"`。
 - PostgreSQL 的强只读事务会阻断可写 CTE 和 `EXPLAIN ANALYZE INSERT`。
 - MySQL 协议族的文件写(`INTO OUTFILE`)仍由工具守卫额外拦截。

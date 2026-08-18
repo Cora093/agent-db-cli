@@ -12,6 +12,7 @@ import {
 } from './commands/common.js';
 import { listCommand } from './commands/list.js';
 import { tablesCommand } from './commands/tables.js';
+import { namespacesCommand } from './commands/namespaces.js';
 import { schemaCommand } from './commands/schema.js';
 import { queryCommand } from './commands/query.js';
 
@@ -73,6 +74,14 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     .action((opts) => {
       const { fmt, cfg } = begin(opts);
       io.out(listCommand(cfg, fmt) + '\n');
+    });
+
+  addCommon(program.command('namespaces').description('列数据源可见的 schema/namespace'))
+    .requiredOption('--ds <id>', '数据源 id')
+    .action(async (opts) => {
+      const { fmt, cfg } = begin(opts);
+      const ds = pickDatasource(cfg, opts.ds);
+      io.out((await namespacesCommand(ds, fmt, io.env)) + '\n');
     });
 
   addCommon(program.command('tables').description('列数据源的表(schema 限定)'))

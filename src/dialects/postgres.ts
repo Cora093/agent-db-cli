@@ -1,5 +1,5 @@
 import pg from 'pg';
-import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema, IndexInfo } from './types.js';
+import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema, IndexInfo, ConstraintInfo, ForeignKeyInfo } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
 import type { DriverName } from '../types.js';
 import type { ExecutionPolicy } from './descriptors.js';
@@ -7,7 +7,7 @@ import { AppError } from '../errors.js';
 import { applyLimit, mapRows } from './sql-util.js';
 import { classifyPgError } from './db-error.js';
 
-interface PgConn extends Conn {
+export interface PgConn extends Conn {
   raw: pg.Client;
   defaultSchema?: string;
 }
@@ -141,6 +141,20 @@ export class PgDialect implements Dialect {
     }
   }
 
+  async listNamespaces(conn: Conn) {
+    const c = conn as PgConn;
+    const res = await c.raw.query(
+      `SELECT nspname AS name FROM pg_namespace WHERE has_schema_privilege(nspname, 'USAGE') ORDER BY nspname`,
+    );
+    return {
+      status: 'full' as const,
+      data: res.rows.map((r) => ({
+        name: r.name as string,
+        system: (r.name as string) === 'information_schema' || (r.name as string).startsWith('pg_'),
+      })),
+    };
+  }
+
   async listTables(conn: Conn, like?: string): Promise<TableInfo[]> {
     const c = conn as PgConn;
     let sql =
@@ -174,54 +188,74 @@ export class PgDialect implements Dialect {
   async getSchema(conn: Conn, table: string, schema?: string): Promise<TableSchema> {
     const c = conn as PgConn;
     const target = await resolvePgSchema(c, table, schema);
-
     const colRes = await c.raw.query(
-      `SELECT a.attname AS name,
-              format_type(a.atttypid, a.atttypmod) AS type,
-              a.attnotnull AS notnull,
-              pg_get_expr(d.adbin, d.adrelid) AS default,
+      `SELECT a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type,
+              a.attnotnull AS notnull, pg_get_expr(d.adbin, d.adrelid) AS default,
               col_description(a.attrelid, a.attnum) AS comment
-       FROM pg_attribute a
-       JOIN pg_class c ON c.oid = a.attrelid
+       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
        JOIN pg_namespace n ON n.oid = c.relnamespace
        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
        WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
        ORDER BY a.attnum`,
       [target, table],
     );
-    if (colRes.rows.length === 0) {
-      throw new AppError('TABLE_NOT_FOUND', `表不存在: ${target}.${table}`);
-    }
-    const columns = colRes.rows.map((r) => ({
-      name: r.name as string,
-      type: r.type as string,
-      nullable: !(r.notnull as boolean),
-      default: (r.default as string) ?? null,
-      comment: (r.comment as string) || null,
-    }));
-
+    if (colRes.rows.length === 0) throw new AppError('TABLE_NOT_FOUND', `表不存在: ${target}.${table}`);
+    const columns = colRes.rows.map((r) => ({ name: r.name as string, type: r.type as string, nullable: !(r.notnull as boolean), default: (r.default as string) ?? null, comment: (r.comment as string) || null }));
     const idxRes = await c.raw.query(
       `SELECT i.relname AS name, ix.indisunique AS unique, ix.indisprimary AS primary,
-              a.attname AS column, array_position(ix.indkey, a.attnum) AS pos
-       FROM pg_index ix
-       JOIN pg_class i ON i.oid = ix.indexrelid
-       JOIN pg_class t ON t.oid = ix.indrelid
-       JOIN pg_namespace n ON n.oid = t.relnamespace
-       JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-       WHERE n.nspname = $1 AND t.relname = $2
-       ORDER BY i.relname, pos`,
+              pg_get_indexdef(ix.indexrelid) AS definition,
+              pg_get_expr(ix.indpred, ix.indrelid) AS predicate,
+              ARRAY(
+                SELECT pg_get_indexdef(ix.indexrelid, key.ordinality::integer, true)
+                FROM generate_series(1, ix.indnatts) WITH ORDINALITY AS key(position, ordinality)
+                ORDER BY key.ordinality
+              ) AS columns
+       FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid
+       JOIN pg_class t ON t.oid = ix.indrelid JOIN pg_namespace n ON n.oid = t.relnamespace
+       WHERE n.nspname = $1 AND t.relname = $2 ORDER BY i.relname`,
       [target, table],
     );
-    const indexes = groupPgIndexes(idxRes.rows as Record<string, unknown>[]);
-    const primaryKey = indexes.find((i) => i.primary)?.columns ?? [];
-
-    const commentRes = await c.raw.query(
-      `SELECT obj_description((quote_ident($1)||'.'||quote_ident($2))::regclass) AS comment`,
+    const indexes = idxRes.rows.map((r): IndexInfo => ({
+      name: r.name as string,
+      columns: r.columns as string[],
+      unique: r.unique as boolean,
+      primary: r.primary as boolean,
+      definition: r.definition as string,
+      predicate: (r.predicate as string) ?? null,
+    }));
+    const constraintRes = await c.raw.query(
+      `SELECT con.conname AS name, con.contype AS type, pg_get_constraintdef(con.oid) AS definition,
+              ARRAY(SELECT att.attname FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ord)
+                    JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=keys.attnum ORDER BY keys.ord) AS columns
+       FROM pg_constraint con JOIN pg_class t ON t.oid=con.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+       WHERE n.nspname=$1 AND t.relname=$2 AND con.contype IN ('p','u','c') ORDER BY con.conname`,
       [target, table],
     );
-    const comment = (commentRes.rows[0]?.comment as string) || null;
-
-    return { schema: target, table, columns, primaryKey, indexes, comment };
+    const constraints = constraintRes.rows.map((r): ConstraintInfo => ({ name: r.name as string, type: r.type === 'p' ? 'PRIMARY KEY' : r.type === 'u' ? 'UNIQUE' : 'CHECK', columns: r.columns as string[], definition: (r.definition as string) ?? null }));
+    const fkRes = await c.raw.query(
+      `SELECT con.conname AS name, rn.nspname AS referenced_schema, rt.relname AS referenced_table,
+              con.confupdtype AS update_action, con.confdeltype AS delete_action,
+              ARRAY(SELECT att.attname FROM unnest(con.conkey) WITH ORDINALITY AS keys(attnum, ord)
+                    JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=keys.attnum ORDER BY keys.ord) AS columns,
+              ARRAY(SELECT att.attname FROM unnest(con.confkey) WITH ORDINALITY AS keys(attnum, ord)
+                    JOIN pg_attribute att ON att.attrelid=con.confrelid AND att.attnum=keys.attnum ORDER BY keys.ord) AS referenced_columns
+       FROM pg_constraint con JOIN pg_class t ON t.oid=con.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+       JOIN pg_class rt ON rt.oid=con.confrelid JOIN pg_namespace rn ON rn.oid=rt.relnamespace
+       WHERE n.nspname=$1 AND t.relname=$2 AND con.contype='f' ORDER BY con.conname`,
+      [target, table],
+    );
+    const action = (v: string) => ({ a: 'NO ACTION', r: 'RESTRICT', c: 'CASCADE', n: 'SET NULL', d: 'SET DEFAULT' })[v] ?? v;
+    const foreignKeys = fkRes.rows.map((r): ForeignKeyInfo => ({ name: r.name as string, columns: r.columns as string[], referencedSchema: r.referenced_schema as string, referencedTable: r.referenced_table as string, referencedColumns: r.referenced_columns as string[], onUpdate: action(r.update_action as string), onDelete: action(r.delete_action as string) }));
+    const metaRes = await c.raw.query(
+      `SELECT CASE c.relkind WHEN 'r' THEN 'BASE TABLE' WHEN 'p' THEN 'PARTITIONED TABLE' WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE c.relkind::text END AS type,
+              obj_description(c.oid) AS comment,
+              CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid, true) ELSE NULL END AS view_definition
+       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2`,
+      [target, table],
+    );
+    const meta = metaRes.rows[0];
+    const full = <T>(data: T) => ({ status: 'full' as const, data });
+    return { schema: target, table, type: meta.type as string, columns: full(columns), primaryKey: full(constraints.find((x) => x.type === 'PRIMARY KEY')?.columns ?? []), indexes: full(indexes), constraints: full(constraints), foreignKeys: full(foreignKeys), comment: full((meta.comment as string) || null), viewDefinition: full((meta.view_definition as string) || null) };
   }
 
 }
@@ -244,20 +278,6 @@ async function resolvePgSchema(c: PgConn, table: string, schema?: string): Promi
     });
   }
   return schemas[0];
-}
-
-function groupPgIndexes(rows: Record<string, unknown>[]): IndexInfo[] {
-  const map = new Map<string, IndexInfo>();
-  for (const r of rows) {
-    const name = r.name as string;
-    let idx = map.get(name);
-    if (!idx) {
-      idx = { name, columns: [], unique: r.unique as boolean, primary: r.primary as boolean };
-      map.set(name, idx);
-    }
-    idx.columns.push(r.column as string);
-  }
-  return [...map.values()];
 }
 
 /** 基本标识符清洗:仅允许安全字符,用双引号包裹,内部双引号转义。 */

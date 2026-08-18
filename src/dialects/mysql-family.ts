@@ -1,5 +1,17 @@
 import mysql from 'mysql2/promise';
-import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema, IndexInfo } from './types.js';
+import type {
+  ColKind,
+  Dialect,
+  Conn,
+  RunOptions,
+  QueryResult,
+  TableInfo,
+  TableSchema,
+  IndexInfo,
+  ConstraintInfo,
+  ForeignKeyInfo,
+  IntrospectionStatus,
+} from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
 import type { DriverName } from '../types.js';
 import type { ExecutionPolicy, IntrospectionCapability } from './descriptors.js';
@@ -14,7 +26,7 @@ export interface FamilyParams {
   execution: ExecutionPolicy;
 }
 
-interface MysqlConn extends Conn {
+export interface MysqlConn extends Conn {
   raw: mysql.Connection;
   database?: string;
 }
@@ -117,6 +129,21 @@ export class MysqlFamilyDialect implements Dialect {
     }
   }
 
+  async listNamespaces(conn: Conn) {
+    const c = conn as MysqlConn;
+    const [rows] = await c.raw.query(
+      'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME',
+    );
+    const system = new Set(['information_schema', 'mysql', 'performance_schema', 'sys']);
+    return {
+      status: 'full' as const,
+      data: (rows as Record<string, unknown>[]).map((r) => {
+        const name = r.SCHEMA_NAME as string;
+        return { name, system: system.has(name) };
+      }),
+    };
+  }
+
   async listTables(conn: Conn, like?: string): Promise<TableInfo[]> {
     const c = conn as MysqlConn;
     const schema = c.database ?? (await currentDatabase(c.raw));
@@ -141,17 +168,13 @@ export class MysqlFamilyDialect implements Dialect {
   async getSchema(conn: Conn, table: string, schema?: string): Promise<TableSchema> {
     const c = conn as MysqlConn;
     const target = await resolveSchema(c, table, schema);
-
     const [colRows] = await c.raw.query(
       'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, COLUMN_COMMENT ' +
         'FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
       [target, table],
     );
     const cols = colRows as Record<string, unknown>[];
-    if (cols.length === 0) {
-      throw new AppError('TABLE_NOT_FOUND', `表不存在: ${target}.${table}`);
-    }
-
+    if (cols.length === 0) throw new AppError('TABLE_NOT_FOUND', `表不存在: ${target}.${table}`);
     const columns = cols.map((r) => ({
       name: r.COLUMN_NAME as string,
       type: r.COLUMN_TYPE as string,
@@ -159,35 +182,85 @@ export class MysqlFamilyDialect implements Dialect {
       default: (r.COLUMN_DEFAULT as string) ?? null,
       comment: (r.COLUMN_COMMENT as string) || null,
     }));
-    const primaryKey = cols.filter((r) => r.COLUMN_KEY === 'PRI').map((r) => r.COLUMN_NAME as string);
-
     const [tblRows] = await c.raw.query(
-      'SELECT TABLE_COMMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
+      'SELECT TABLE_TYPE, TABLE_COMMENT, VIEW_DEFINITION FROM information_schema.TABLES ' +
+        'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
       [target, table],
     );
-    const comment = ((tblRows as Record<string, unknown>[])[0]?.TABLE_COMMENT as string) || null;
-
-    if (this.p.introspection === 'best-effort') {
+    const tbl = (tblRows as Record<string, unknown>[])[0] ?? {};
+    const type = (tbl.TABLE_TYPE as string) ?? 'UNKNOWN';
+    const comment = (tbl.TABLE_COMMENT as string) || null;
+    const viewDefinition = type === 'VIEW' ? ((tbl.VIEW_DEFINITION as string) || null) : null;
+    const status: IntrospectionStatus = this.p.introspection;
+    const detail = status === 'best-effort' ? 'information_schema support varies by compatible engine' : undefined;
+    if (status === 'best-effort') {
+      const keyColumns = cols.filter((r) => r.COLUMN_KEY === 'PRI').map((r) => r.COLUMN_NAME as string);
       return {
-        schema: target,
-        table,
-        columns,
-        primaryKey,
-        indexes: 'N/A',
-        comment,
-        note: '索引/主键(sort-key)best-effort,完整定义见 SHOW CREATE TABLE',
+        schema: target, table, type,
+        columns: { status: 'full', data: columns },
+        primaryKey: { status, data: keyColumns, detail },
+        indexes: { status, data: [], detail },
+        constraints: { status, data: [], detail },
+        foreignKeys: { status, data: [], detail },
+        comment: { status: 'full', data: comment },
+        viewDefinition: { status, data: viewDefinition, detail },
       };
     }
-
     const [idxRows] = await c.raw.query(
-      'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME ' +
-        'FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ' +
-        'ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+      'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS ' +
+        'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX',
       [target, table],
     );
     const indexes = groupIndexes(idxRows as Record<string, unknown>[]);
-
-    return { schema: target, table, columns, primaryKey, indexes, comment };
+    let constraints: ConstraintInfo[];
+    let constraintsStatus: IntrospectionStatus = 'full';
+    let constraintsDetail: string | undefined;
+    try {
+      const [constraintRows] = await c.raw.query(
+        'SELECT tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, kcu.COLUMN_NAME, kcu.ORDINAL_POSITION, cc.CHECK_CLAUSE ' +
+          'FROM information_schema.TABLE_CONSTRAINTS tc ' +
+          'LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu ON kcu.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA ' +
+          'AND kcu.TABLE_NAME=tc.TABLE_NAME AND kcu.CONSTRAINT_NAME=tc.CONSTRAINT_NAME ' +
+          'LEFT JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA ' +
+          'AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME ' +
+          "WHERE tc.TABLE_SCHEMA=? AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE IN ('PRIMARY KEY','UNIQUE','CHECK') " +
+          'ORDER BY tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION',
+        [target, table],
+      );
+      constraints = groupMysqlConstraints(constraintRows as Record<string, unknown>[]);
+    } catch {
+      constraintsStatus = 'best-effort';
+      constraintsDetail = 'CHECK_CONSTRAINTS is unavailable; PK and unique constraints derived from indexes';
+      constraints = indexes
+        .filter((index) => index.primary || index.unique)
+        .map((index) => ({
+          name: index.name,
+          type: index.primary ? 'PRIMARY KEY' as const : 'UNIQUE' as const,
+          columns: index.columns,
+        }));
+    }
+    const [fkRows] = await c.raw.query(
+      'SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.ORDINAL_POSITION, ' +
+        'kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME, ' +
+        'rc.UPDATE_RULE, rc.DELETE_RULE FROM information_schema.KEY_COLUMN_USAGE kcu ' +
+        'JOIN information_schema.REFERENTIAL_CONSTRAINTS rc ON rc.CONSTRAINT_SCHEMA=kcu.CONSTRAINT_SCHEMA ' +
+        'AND rc.TABLE_NAME=kcu.TABLE_NAME AND rc.CONSTRAINT_NAME=kcu.CONSTRAINT_NAME ' +
+        'WHERE kcu.TABLE_SCHEMA=? AND kcu.TABLE_NAME=? AND kcu.REFERENCED_TABLE_NAME IS NOT NULL ' +
+        'ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION',
+      [target, table],
+    );
+    const foreignKeys = groupMysqlForeignKeys(fkRows as Record<string, unknown>[]);
+    const primaryKey = indexes.find((index) => index.primary)?.columns ?? [];
+    return {
+      schema: target, table, type,
+      columns: { status, data: columns },
+      primaryKey: { status, data: primaryKey },
+      indexes: { status, data: indexes },
+      constraints: { status: constraintsStatus, data: constraints, detail: constraintsDetail },
+      foreignKeys: { status, data: foreignKeys },
+      comment: { status, data: comment },
+      viewDefinition: { status, data: viewDefinition },
+    };
   }
 
 }
@@ -231,6 +304,34 @@ function groupIndexes(rows: Record<string, unknown>[]): IndexInfo[] {
       map.set(name, idx);
     }
     idx.columns.push(r.COLUMN_NAME as string);
+  }
+  return [...map.values()];
+}
+function groupMysqlConstraints(rows: Record<string, unknown>[]): ConstraintInfo[] {
+  const map = new Map<string, ConstraintInfo>();
+  for (const r of rows) {
+    const name = r.CONSTRAINT_NAME as string;
+    let item = map.get(name);
+    if (!item) {
+      item = { name, type: r.CONSTRAINT_TYPE as ConstraintInfo['type'], columns: [], definition: (r.CHECK_CLAUSE as string) ?? null };
+      map.set(name, item);
+    }
+    if (r.COLUMN_NAME) item.columns.push(r.COLUMN_NAME as string);
+  }
+  return [...map.values()];
+}
+
+function groupMysqlForeignKeys(rows: Record<string, unknown>[]): ForeignKeyInfo[] {
+  const map = new Map<string, ForeignKeyInfo>();
+  for (const r of rows) {
+    const name = r.CONSTRAINT_NAME as string;
+    let item = map.get(name);
+    if (!item) {
+      item = { name, columns: [], referencedSchema: (r.REFERENCED_TABLE_SCHEMA as string) ?? null, referencedTable: r.REFERENCED_TABLE_NAME as string, referencedColumns: [], onUpdate: (r.UPDATE_RULE as string) ?? null, onDelete: (r.DELETE_RULE as string) ?? null };
+      map.set(name, item);
+    }
+    item.columns.push(r.COLUMN_NAME as string);
+    item.referencedColumns.push(r.REFERENCED_COLUMN_NAME as string);
   }
   return [...map.values()];
 }

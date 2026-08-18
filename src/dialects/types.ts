@@ -45,6 +45,19 @@ export interface QueryResult {
   ms: number;
 }
 
+export type IntrospectionStatus = 'full' | 'best-effort' | 'unsupported';
+
+export interface IntrospectionResult<T> {
+  status: IntrospectionStatus;
+  data: T;
+  detail?: string;
+}
+
+export interface NamespaceInfo {
+  name: string;
+  system: boolean;
+}
+
 export interface TableInfo {
   /** schema/database 限定;无则 null */
   schema: string | null;
@@ -68,19 +81,38 @@ export interface IndexInfo {
   columns: string[];
   unique: boolean;
   primary: boolean;
+  definition?: string | null;
+  predicate?: string | null;
+}
+
+export interface ConstraintInfo {
+  name: string;
+  type: 'PRIMARY KEY' | 'UNIQUE' | 'CHECK';
+  columns: string[];
+  definition?: string | null;
+}
+
+export interface ForeignKeyInfo {
+  name: string;
+  columns: string[];
+  referencedSchema: string | null;
+  referencedTable: string;
+  referencedColumns: string[];
+  onUpdate?: string | null;
+  onDelete?: string | null;
 }
 
 export interface TableSchema {
   schema: string | null;
   table: string;
-  columns: ColumnInfo[];
-  /** 主键列名;空数组表示无主键或 best-effort 未知 */
-  primaryKey: string[];
-  /** 'N/A' 表示 best-effort 引擎不自省索引(见 note) */
-  indexes: IndexInfo[] | 'N/A';
-  comment?: string | null;
-  /** best-effort 引擎的兜底提示,如 "索引/主键见 SHOW CREATE TABLE" */
-  note?: string;
+  type: string;
+  columns: IntrospectionResult<ColumnInfo[]>;
+  primaryKey: IntrospectionResult<string[]>;
+  indexes: IntrospectionResult<IndexInfo[]>;
+  constraints: IntrospectionResult<ConstraintInfo[]>;
+  foreignKeys: IntrospectionResult<ForeignKeyInfo[]>;
+  comment: IntrospectionResult<string | null>;
+  viewDefinition: IntrospectionResult<string | null>;
 }
 
 /**
@@ -95,6 +127,7 @@ export interface Dialect {
   /** 包只读事务 + 服务端超时 + 限行;读完 ROLLBACK。 */
   runReadOnly(conn: Conn, sql: string, opts: RunOptions): Promise<QueryResult>;
 
+  listNamespaces(conn: Conn): Promise<IntrospectionResult<NamespaceInfo[]>>;
   listTables(conn: Conn, like?: string): Promise<TableInfo[]>;
   getSchema(conn: Conn, table: string, schema?: string): Promise<TableSchema>;
 }

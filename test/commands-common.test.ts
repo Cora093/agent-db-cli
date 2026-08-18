@@ -118,3 +118,24 @@ describe('resolveQueryLimits (§7/§8 夹紧)', () => {
     expect(r.notes.join(' ')).toContain('300');
   });
 });
+
+describe('renderView metadata sections', () => {
+  const view = { json: { ok: true }, columns: [], rows: [], sections: [
+    { name: 'primaryKey', columns: ['column'], rows: [['id']] },
+    { name: 'constraints', columns: ['name', 'type'], rows: [['users_pk', 'PRIMARY KEY']] },
+  ] };
+  it('table includes every labeled section', () => {
+    const text = renderView(view, 'table');
+    expect(text).toContain('[primaryKey]');
+    expect(text).toContain('[constraints]');
+    expect(text).toContain('users_pk');
+  });
+  it('csv has one consistent section-aware schema', () => {
+    const text = renderView(view, 'csv');
+    const records = text.split('\r\n').map((line) => line.split(','));
+    expect(records[0]).toEqual(['section', 'field1', 'field2']);
+    expect(new Set(records.map((record) => record.length))).toEqual(new Set([3]));
+    expect(records).toContainEqual(['primaryKey', 'column', '']);
+    expect(records).toContainEqual(['constraints', 'users_pk', 'PRIMARY KEY']);
+  });
+});

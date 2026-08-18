@@ -1,4 +1,5 @@
 import type { SqlValue } from '../types.js';
+import { buildQueryMeta, rowToObject, uniqueColumnKeys, versioned, type QueryMeta } from './contract.js';
 
 export interface TableMeta {
   rowCount: number;
@@ -39,10 +40,11 @@ function tableCell(v: SqlValue): string {
 }
 
 export interface InlineJson {
+  contractVersion: string;
   ds: string;
   columns: string[];
   rows: SqlValue[][];
-  meta: { rowCount: number; ms: number; truncated: boolean; spillPath: null };
+  meta: QueryMeta;
 }
 
 /** 内联成功输出对象(§9a)。结果小于阈值时使用。 */
@@ -53,25 +55,26 @@ export function buildInlineJson(
   ms: number,
   truncated: boolean,
 ): InlineJson {
-  return {
+  return versioned({
     ds,
     columns,
     rows,
-    meta: { rowCount: rows.length, ms, truncated, spillPath: null },
-  };
+    meta: buildQueryMeta({
+      rowCount: rows.length,
+      deliveredRowCount: rows.length,
+      ms,
+      queryTruncated: truncated,
+      mode: 'inline',
+    }),
+  });
 }
 
 export interface SpillJson {
+  contractVersion: string;
   ds: string;
   columns: string[];
   preview: SqlValue[][];
-  meta: {
-    rowCount: number;
-    ms: number;
-    truncated: boolean;
-    spillPath: string;
-    bytes: number;
-  };
+  meta: QueryMeta;
 }
 
 const PREVIEW_ROWS = 50;
@@ -83,18 +86,20 @@ export function buildSpillJson(
   rows: SqlValue[][],
   meta: { ms: number; truncated: boolean; spillPath: string; bytes: number },
 ): SpillJson {
-  return {
+  return versioned({
     ds,
     columns,
     preview: rows.slice(0, PREVIEW_ROWS),
-    meta: {
+    meta: buildQueryMeta({
       rowCount: rows.length,
+      deliveredRowCount: rows.slice(0, PREVIEW_ROWS).length,
       ms: meta.ms,
-      truncated: meta.truncated,
+      queryTruncated: meta.truncated,
+      mode: 'preview',
       spillPath: meta.spillPath,
       bytes: meta.bytes,
-    },
-  };
+    }),
+  });
 }
 
 /** RFC-4180 CSV(§9)。NULL 与空串都成空字段(已知歧义,故 CSV 仅显式取用)。 */
@@ -106,26 +111,12 @@ export function formatCsv(columns: string[], rows: SqlValue[][]): string {
   return lines.join('\r\n');
 }
 
-/** 行数组按列名映射成对象(重复列名后者覆盖,极罕见)。 */
+/** 行数组按唯一列 key 映射成对象,重复标签以 #2/#3 后缀无损保留。 */
 export function rowsToObjects(columns: string[], rows: SqlValue[][]): Record<string, SqlValue>[] {
-  return rows.map((row) => {
-    const obj: Record<string, SqlValue> = {};
-    for (let i = 0; i < columns.length; i++) obj[columns[i]] = row[i] ?? null;
-    return obj;
-  });
+  const keys = uniqueColumnKeys(columns);
+  return rows.map((row) => rowToObject(keys, row));
 }
 
-/**
- * NDJSON(§9):一行一个 row 对象,行末换行。
- * null 自描述、类型/精度保真、行对行便于 Read(offset/limit)/Grep 切片。
- */
-export function toNdjson(columns: string[], rows: SqlValue[][]): string {
-  let out = '';
-  for (const obj of rowsToObjects(columns, rows)) {
-    out += JSON.stringify(obj) + '\n';
-  }
-  return out;
-}
 
 function csvCell(v: SqlValue): string {
   if (v === null) return '';

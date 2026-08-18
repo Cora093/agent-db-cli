@@ -5,6 +5,7 @@ import { AppError, toAppError } from './errors.js';
 import { loadConfig } from './config/load.js';
 import { renderError } from './output/emit.js';
 import { getVersion } from './version.js';
+import { getCapabilities } from './capabilities.js';
 import {
   pickDatasource,
   resolveSqlInput,
@@ -26,11 +27,11 @@ export interface CliIO {
   readStdin?: () => string;
 }
 
-const VALID_FORMATS: OutputFormat[] = ['json', 'table', 'csv'];
+const VALID_FORMATS: OutputFormat[] = ['json', 'ndjson', 'table', 'csv'];
 
 function parseFormat(v: string): OutputFormat {
   if (!(VALID_FORMATS as string[]).includes(v)) {
-    throw new AppError('BAD_USAGE', `未知 --format '${v}'`, { hint: '可用: json, table, csv' });
+    throw new AppError('BAD_USAGE', `未知 --format '${v}'`, { hint: '可用: json, ndjson, table, csv' });
   }
   return v as OutputFormat;
 }
@@ -52,9 +53,12 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     .description('只读多源数据库查询工具(MySQL/PG/达梦及 MySQL 协议族,供 AI Agent 使用)')
     .version(getVersion(), '--version', '显示版本');
   program.exitOverride();
+  let commanderStderr = '';
   program.configureOutput({
     writeOut: (s) => io.out(s),
-    writeErr: (s) => io.err(s),
+    writeErr: (s) => {
+      commanderStderr += s;
+    },
   });
 
   let currentFormat: OutputFormat = 'json';
@@ -62,13 +66,17 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
   const addCommon = (cmd: Command): Command =>
     cmd
       .option('--config <path>', '配置文件路径(覆盖默认按 OS 自算)')
-      .option('--format <fmt>', '输出格式 json|table|csv', 'json');
+      .option('--format <fmt>', '输出格式 json|ndjson|table|csv', 'json');
 
   const begin = (opts: { format: string; config?: string }) => {
     currentFormat = parseFormat(opts.format);
     const cfg = loadConfig({ env: io.env, configPath: opts.config });
     return { fmt: currentFormat, cfg };
   };
+
+  program.command('capabilities').description('输出 CLI 和 driver 能力(无需配置或连接)').action(() => {
+    io.out(JSON.stringify(getCapabilities()) + '\n');
+  });
 
   addCommon(program.command('list').description('列所有数据源'))
     .action((opts) => {
@@ -145,8 +153,14 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     return 0;
   } catch (e) {
     if (e instanceof CommanderError) {
-      // --help / --version → exitCode 0;用法错 → 非 0(commander 已打印)
-      return e.exitCode;
+      if (e.exitCode === 0) return 0; // help/version 已经写 stdout
+      const message = e.message.replace(/^error:\s*/i, '');
+      const detail = commanderStderr.trim().replace(/^error:\s*/i, '');
+      const usageError = new AppError('BAD_USAGE', message, {
+        hint: detail && detail !== message ? detail : undefined,
+      });
+      io.err(renderError(usageError, currentFormat) + '\n');
+      return usageError.exitCode;
     }
     const appErr = toAppError(e);
     io.err(renderError(appErr, currentFormat) + '\n');

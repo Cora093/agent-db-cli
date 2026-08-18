@@ -2,6 +2,7 @@ import type { Config, DatasourceConfig } from '../config/types.js';
 import type { OutputFormat, SqlValue } from '../types.js';
 import { AppError } from '../errors.js';
 import { formatCsv, formatTable } from '../output/format.js';
+import { buildNdjson, versioned } from '../output/contract.js';
 
 /** list/tables/schema 的统一视图:json 用结构对象,table/csv 用列+行。 */
 export interface ViewSection {
@@ -11,6 +12,8 @@ export interface ViewSection {
 }
 
 export interface View {
+  command?: string;
+  ds?: string;
   json: unknown;
   columns: string[];
   rows: SqlValue[][];
@@ -18,28 +21,35 @@ export interface View {
 }
 
 export function renderView(view: View, format: OutputFormat): string {
-  if (format === 'json') return JSON.stringify(view.json);
-  if (format === 'csv' && !view.sections) return formatCsv(view.columns, view.rows);
-  const sections = view.sections ?? [{ name: '', columns: view.columns, rows: view.rows }];
-  if (format === 'csv') {
-    const width = Math.max(0, ...sections.map((section) => section.columns.length));
-    const columns = ['section', ...Array.from({ length: width }, (_, i) => `field${i + 1}`)];
-    const rows = sections.flatMap((section) => [
-      [section.name, ...section.columns, ...Array(width - section.columns.length).fill(null)],
-      ...section.rows.map((row) => [
-        section.name,
-        ...row,
-        ...Array(width - row.length).fill(null),
-      ]),
-    ]);
-    return formatCsv(columns, rows);
+  if (format === 'json') return JSON.stringify(versioned(view.json as object));
+  const flat = flattenSections(view);
+  if (format === 'ndjson') {
+    return buildNdjson({
+      command: view.command ?? 'view',
+      ...(view.ds === undefined ? {} : { ds: view.ds }),
+      columns: flat.columns,
+      meta: { rowCount: flat.rows.length, deliveredRowCount: flat.rows.length },
+    }, flat.rows).trimEnd();
   }
+  if (format === 'csv') return formatCsv(flat.columns, flat.rows);
+  const sections = view.sections ?? [{ name: '', columns: view.columns, rows: view.rows }];
   return sections
     .map((section) => {
       const body = formatTable(section.columns, section.rows);
       return section.name ? `[${section.name}]\n${body}` : body;
     })
     .join('\n\n');
+}
+
+function flattenSections(view: View): { columns: string[]; rows: SqlValue[][] } {
+  if (!view.sections) return { columns: view.columns, rows: view.rows };
+  const width = Math.max(0, ...view.sections.map((section) => section.columns.length));
+  const columns = ['section', ...Array.from({ length: width }, (_, i) => `field${i + 1}`)];
+  const rows = view.sections.flatMap((section) => [
+    [section.name, ...section.columns, ...Array(width - section.columns.length).fill(null)],
+    ...section.rows.map((row) => [section.name, ...row, ...Array(width - row.length).fill(null)]),
+  ]);
+  return { columns, rows };
 }
 
 /** 选数据源(§8):未命中报错并列出所有合法 id,便于 Agent 自纠。 */

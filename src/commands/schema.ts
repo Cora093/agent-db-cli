@@ -19,6 +19,8 @@ export async function schemaCommand(
   try {
     const s = await dialect.getSchema(conn, table, schema);
     const view: View = {
+      command: 'schema',
+      ds: ds.id,
       json: { ds: ds.id, ...s },
       columns: ['column', 'type', 'nullable', 'default', 'comment'],
       rows: s.columns.data.map(

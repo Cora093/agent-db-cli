@@ -14,7 +14,7 @@ export type DriverName =
 export type StatementKind = 'select' | 'with' | 'show' | 'explain' | 'describe';
 
 /** 输出格式(§9)。默认 json(agent-first)。 */
-export type OutputFormat = 'json' | 'table' | 'csv';
+export type OutputFormat = 'json' | 'ndjson' | 'table' | 'csv';
 
 /**
  * 归一化后的值(0.2.0 输出契约)。Dialect 按列类型(ColKind)把驱动原生值收敛到:

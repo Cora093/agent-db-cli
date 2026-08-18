@@ -5,6 +5,7 @@
 ## 发现:有哪些源 / 表 / 列
 
 ```bash
+agent-db capabilities   # 无配置/连接，先发现 CLI/driver 能力
 agent-db list
 agent-db namespaces --ds prod-mysql-ro
 agent-db tables --ds prod-mysql-ro --like '%order%'
@@ -54,7 +55,7 @@ agent-db query --ds prod-mysql-ro \
 
 ```bash
 agent-db query --ds bi-doris-ro -f big.sql
-# → stdout 给前 50 行预览 + meta.spillPath(NDJSON 全量)
+# → stdout 给 contractVersion + 前 50 行 preview + meta.mode=preview + spillPath
 # 然后用 Read(offset/limit) 或 Grep 读 spillPath,而不是把全部塞进上下文
 ```
 

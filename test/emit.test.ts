@@ -59,7 +59,10 @@ describe('emitResult — JSON 默认(agent-first)', () => {
     const obj = JSON.parse(out);
     expect(deps.writeSpill).not.toHaveBeenCalled();
     expect(obj.rows).toHaveLength(50);
-    expect(obj.meta.truncated).toBe(true);
+    expect(obj.meta.queryTruncated).toBe(false);
+    expect(obj.meta.deliveryOmittedRows).toBe(70);
+    expect(obj.meta.rowCount).toBe(120);
+    expect(obj.meta.deliveredRowCount).toBe(50);
     expect(obj.meta.spillPath).toBeNull();
   });
 });
@@ -140,7 +143,18 @@ describe('emitResult — --out 写文件', () => {
     );
     const [, content] = deps.writeOut.mock.calls[0];
     const obj = JSON.parse(content);
-    expect(obj.meta).toEqual({ rowCount: 3, truncated: true });
+    expect(obj.contractVersion).toBe('1.0');
+    expect(obj.meta).toEqual({
+      rowCount: 3,
+      deliveredRowCount: 3,
+      ms: 7,
+      queryTruncated: true,
+      deliveryOmittedRows: 0,
+      mode: 'out',
+      spillPath: null,
+      outPath: '/o/data.json',
+      bytes: null,
+    });
     expect(obj.rows).toHaveLength(3);
   });
 

@@ -96,6 +96,12 @@ datasources:
 
 ## 常用命令
 
+发现 CLI 和 driver 能力（无需配置或连接）：
+
+```bash
+agent-db capabilities
+```
+
 列出数据源：
 
 ```bash
@@ -155,7 +161,7 @@ cat query.sql | agent-db query --ds prod-mysql-ro --file -
 
 ```text
 --config <path>          指定配置文件
---format json|table|csv  输出格式，默认 json
+--format json|ndjson|table|csv  输出格式，默认 json
 --version                输出版本
 ```
 
@@ -171,16 +177,34 @@ cat query.sql | agent-db query --ds prod-mysql-ro --file -
 
 ## 输出约定
 
-- 成功数据输出到 stdout。
-- 错误和提示输出到 stderr。
-- 默认格式是 JSON。
-- 大结果会自动写入 NDJSON 文件，stdout 只输出预览和 `meta.spillPath`。
-- `--out <path>` 会把完整结果写入指定文件。
+结构化输出契约版本为 `1.0`。成功数据只写 stdout，错误、诊断和提示只写 stderr。Commander 参数错误也只输出一个版本化 `BAD_USAGE` JSON；`--help` / `--version` 保持文本成功输出。
 
-这个约定方便 shell 脚本和 Agent 把 stdout 当作纯数据通道处理。
+默认 JSON 查询结果是列式结构：
 
-## 只读安全模型
+```json
+{"contractVersion":"1.0","ds":"prod-mysql-ro","columns":["id","status"],"rows":[[1,"paid"]],"meta":{"rowCount":1,"deliveredRowCount":1,"ms":8,"queryTruncated":false,"deliveryOmittedRows":0,"mode":"inline","spillPath":null,"outPath":null,"bytes":null}}
+```
 
+错误 JSON 同样带版本：`{"contractVersion":"1.0","error":{"category":"...","message":"..."}}`。
+
+- `rowCount` 是数据库返回给 CLI 的行数；`deliveredRowCount` 是当前 stdout/文件实际携带的行数。
+- `queryTruncated` 只表示查询的行数硬顶丢弃了数据库行；`deliveryOmittedRows` 只表示预览或 `--no-spill` 在交付层省略的行，两者不得混用。
+- `meta.mode` 为 `inline`、`preview`、`stdout` 或 `out`；路径和字节字段始终存在，不适用时为 `null`。
+- 所有 NDJSON（`list/tables/schema/query` stdout、spill、`--out .ndjson`）使用同一协议：第一行是版本化 `type: "header"`，含命令、原始 `columns`、唯一 `keys` 和 meta；后续是零或多个版本化 `type: "row"` 记录。空结果仍有 header。
+- 重复列标签保留在列式 JSON/CSV 的原位置；NDJSON row 的对象 key 全局唯一，冲突时追加 `#N`。
+- `--out` 文件内 meta 带真实 `outPath`。为避免 JSON 自身字节数递归，文件内 `bytes` 为 `null`；stdout 摘要的 `bytes` 是最终写入内容的 UTF-8 字节数（包含 JSON envelope 或 NDJSON header/rows）。
+
+能力发现无需配置或数据库连接：
+
+```bash
+agent-db capabilities
+```
+
+它返回版本化 JSON，包含命令、只读 statement keywords/aliases（包括 `desc -> describe`）、limit/timeout、输出格式，以及每个 driver 的事务、服务端超时和自省能力。
+
+### 从 0.1.x 迁移
+
+消费方必须允许新增字段并检查 `contractVersion` 主版本。把旧 `meta.truncated` 迁移为 `meta.queryTruncated`，用 `deliveryOmittedRows` 判断 stdout 是否只是预览；用 `deliveredRowCount` 校验当前载荷。旧的“每行直接是数据对象”NDJSON 解析器必须改为先读取 `type: "header"`，再从每个 `type: "row"` 的 `row` 字段取数据。
 `agent-db-cli` 采用多层防护：
 
 1. 使用数据库只读账号。这是真正的安全边界。

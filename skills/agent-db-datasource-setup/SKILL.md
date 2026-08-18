@@ -67,6 +67,8 @@ Nacos 项目按 [references/nacos.md](references/nacos.md) 操作(登录、拉�
 
 ## 第 6 步:验证
 
+先用 `agent-db capabilities` 无连接确认 CLI 能力；其 JSON 带 `contractVersion`，statement aliases 包括 `desc -> describe`。验证命令的成功数据只在 stdout，错误（含参数错误）是 stderr 的单个版本化 JSON。
+
 ```bash
 agent-db query --ds <新id> "SELECT 1"
 ```

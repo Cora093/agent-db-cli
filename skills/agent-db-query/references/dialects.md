@@ -20,7 +20,7 @@
 | MySQL 族 / DM | `... LIMIT 100` 或 `LIMIT 20, 100`(offset, count) |
 | PostgreSQL | `... LIMIT 100 OFFSET 20` |
 
-> 工具有 **500 行硬顶**:不管你写多大 LIMIT,最多返回 500 行并标 `truncated`。要全量用 `--out`,或用聚合收窄。
+> 工具有 **500 行硬顶**:不管你写多大 LIMIT,最多返回 500 行并标 `meta.queryTruncated=true`。要全量用 `--out`,或用聚合收窄。
 
 ## 标识符引用
 

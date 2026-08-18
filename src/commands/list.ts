@@ -6,6 +6,7 @@ import { renderView, type View } from './common.js';
 export function listCommand(config: Config, format: OutputFormat): string {
   const dss = Object.values(config.datasources);
   const view: View = {
+    command: 'list',
     json: {
       datasources: dss.map((d) => ({
         id: d.id,

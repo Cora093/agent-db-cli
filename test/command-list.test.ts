@@ -35,6 +35,14 @@ describe('listCommand (§8)', () => {
     expect(dmLine).toContain('dm');
   });
 
+  it('ndjson:每行带契约版本且可独立解析', () => {
+    const records = listCommand(config, 'ndjson').split('\n').map((line) => JSON.parse(line));
+    expect(records).toHaveLength(3);
+    expect(records[0]).toMatchObject({ contractVersion: '1.0', type: 'header', command: 'list' });
+    expect(records[1]).toMatchObject({ contractVersion: '1.0', type: 'row', row: { id: 'prod-mysql-ro' } });
+    expect(records[2]).toMatchObject({ contractVersion: '1.0', type: 'row', row: { id: 'dm-core-ro' } });
+  });
+
   it('csv:含表头', () => {
     const out = listCommand(config, 'csv');
     expect(out.split('\r\n')[0]).toBe('id,label,driver,host,database');

@@ -199,7 +199,7 @@ export function standardSuite(spec: SuiteSpec): void {
         'Dave',
         'Eve',
       ]);
-      expect(j.meta.truncated).toBe(false);
+      expect(j.meta.queryTruncated).toBe(false);
     });
   });
 
@@ -216,7 +216,7 @@ export function standardSuite(spec: SuiteSpec): void {
       expect(r.code, r.stderr).toBe(0);
       const j = JSON.parse(r.stdout);
       expect(j.rows.length).toBe(2);
-      expect(j.meta.truncated).toBe(true);
+      expect(j.meta.queryTruncated).toBe(true);
     });
   });
 

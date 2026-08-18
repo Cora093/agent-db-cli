@@ -41,7 +41,10 @@ describe('renderView (§9 三格式)', () => {
     rows: [['a', 'mysql'] as const].map((r) => [...r]),
   };
   it('json → JSON.stringify(view.json)', () => {
-    expect(JSON.parse(renderView(view, 'json'))).toEqual({ datasources: [{ id: 'a' }] });
+    expect(JSON.parse(renderView(view, 'json'))).toEqual({
+      contractVersion: '1.0',
+      datasources: [{ id: 'a' }],
+    });
   });
   it('csv → 表格 csv', () => {
     expect(renderView(view, 'csv')).toBe('id,driver\r\na,mysql');

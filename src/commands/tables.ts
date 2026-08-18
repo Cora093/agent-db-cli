@@ -16,6 +16,8 @@ export async function tablesCommand(
   try {
     const tables = await dialect.listTables(conn, like);
     const view: View = {
+      command: 'tables',
+      ds: ds.id,
       json: { ds: ds.id, tables },
       columns: ['schema', 'name', 'type', 'comment'],
       rows: tables.map(

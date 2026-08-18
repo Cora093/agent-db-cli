@@ -34,13 +34,20 @@ list → namespaces → tables → schema → query
 - `--ds` 传错会报错并**列出所有合法 id**,据此自纠。
 - **list 里根本没有合适的源**,而用户意图指向某个项目代码库(如"查 XX 项目的库")→ 用 `agent-db-datasource-setup` skill 从项目配置 / Nacos 自动配好数据源,再回来查。
 
-## 输出:默认带 `--format json`
+## 能力发现与输出契约
 
+- 首次使用或不确定 driver 能力时先跑 `agent-db capabilities`。它无需配置或连接，返回命令、statement、limit/timeout、自省和输出能力。
 - `schema` JSON 的各元数据字段包含 `status` 和 `data`；只有 `full` 状态的空数组才表示确定不存在。
-- `schema --format table|csv` 输出多 section，不会省略主键、索引和约束。
+- `schema --format table|csv|ndjson` 输出完整 section，不会省略主键、索引和约束。
 - 查询默认就是列式 JSON;**给人看时**才加 `--format table`;要拖进 Excel 才 `--format csv`。
-- 成功结果形如 `{ "ds", "columns", "rows", "meta": { "rowCount", "ms", "truncated", "spillPath" } }`。
-- 错误形如 `{ "error": { "category", "message", "hint" } }`,**只在 stderr**;数据通道(stdout)不被污染。
+- 结构化契约版本为 `1.0`；成功和错误 JSON 顶层都有 `contractVersion`。stdout 只含成功数据，stderr 只含错误/诊断/提示。
+- 默认列式 JSON 的 `meta` 固定含 `rowCount`、`deliveredRowCount`、`ms`、`queryTruncated`、`deliveryOmittedRows`、`mode`、路径和 `bytes`。
+- `queryTruncated` 只代表数据库查询硬顶；`deliveryOmittedRows` 代表 preview/`--no-spill` 交付省略。不要混用。
+- 错误（包括 Commander 参数错误）是单个版本化 JSON，只在 stderr；help/version 是 stdout 文本成功。
+- 所有 NDJSON 第一行都是版本化 `type: header`（空结果也有），后续是版本化 `type: row`，数据在 `row` 字段。spill 和 `.ndjson` 导出同协议。
+- SQL 有重复列名时，列式 JSON/CSV 按位置保留；NDJSON `keys` 全局唯一。优先给重复列显式 alias。
+- `.json`/`.ndjson` 文件内 `outPath` 真实，`bytes=null`；stdout 摘要的 `bytes` 是完整文件 UTF-8 字节数。
+- 0.1.x 迁移：`truncated` 改读 `queryTruncated`；NDJSON 改为 header/row 分帧。
 
 ## 写 SQL:简单用位置参数,复杂写临时文件
 

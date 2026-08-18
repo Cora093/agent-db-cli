@@ -46,11 +46,35 @@ function mkIO(): { io: CliIO; out: () => string; err: () => string } {
 }
 
 describe('CLI run() — 无需 DB 的路径', () => {
+  it('capabilities:无需配置或连接即可发现 CLI/driver 能力', async () => {
+    const { io, out, err } = mkIO();
+    const code = await run(['capabilities'], io);
+    expect(code).toBe(0);
+    expect(err()).toBe('');
+    const obj = JSON.parse(out());
+    expect(obj.contractVersion).toBe('1.0');
+    expect(obj.output.formats).toContain('ndjson');
+    expect(obj.statements.keywords).toContain('describe');
+    expect(obj.statements.aliases).toEqual({ desc: 'describe' });
+    expect(obj.drivers.find((driver: { driver: string }) => driver.driver === 'dm').introspection)
+      .toBe('best-effort');
+    expect(obj.drivers.map((driver: { driver: string }) => driver.driver)).toEqual([
+      'mysql',
+      'doris',
+      'starrocks',
+      'tidb',
+      'oceanbase',
+      'postgres',
+      'dm',
+    ]);
+  });
+
   it('list:退出 0,stdout 给数据源 JSON', async () => {
     const { io, out } = mkIO();
     const code = await run(['list', '--config', cfgPath], io);
     expect(code).toBe(0);
     const obj = JSON.parse(out());
+    expect(obj.contractVersion).toBe('1.0');
     expect(obj.datasources.map((d: { id: string }) => d.id)).toEqual([
       'prod-mysql-ro',
       'bi-doris-ro',
@@ -65,11 +89,28 @@ describe('CLI run() — 无需 DB 的路径', () => {
     expect(out()).toContain('driver');
   });
 
+  it.each([
+    { argv: ['query'], message: 'required option' },
+    { argv: ['unknown-command'], message: 'unknown command' },
+    { argv: ['list', '--unknown'], message: 'unknown option' },
+  ])('Commander 用法错误: $message → 单个版本化 stderr JSON', async ({ argv }) => {
+    const { io, out, err } = mkIO();
+    const code = await run(argv, io);
+    expect(code).toBe(1);
+    expect(out()).toBe('');
+    const lines = err().trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const obj = JSON.parse(lines[0]);
+    expect(obj.contractVersion).toBe('1.0');
+    expect(obj.error.category).toBe('BAD_USAGE');
+  });
+
   it('未知 --ds → 退出 5,stderr JSON 错误列出合法 id', async () => {
     const { io, err } = mkIO();
     const code = await run(['query', '--ds', 'prd', '--config', cfgPath, 'SELECT 1'], io);
     expect(code).toBe(5);
     const obj = JSON.parse(err());
+    expect(obj.contractVersion).toBe('1.0');
     expect(obj.error.category).toBe('DATASOURCE_NOT_FOUND');
     expect(obj.error.hint).toContain('prod-mysql-ro');
   });

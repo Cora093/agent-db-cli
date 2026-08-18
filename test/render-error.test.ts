@@ -10,6 +10,7 @@ describe('renderError (§9c)', () => {
   it('json 格式 → {error:{category,message,hint}}', () => {
     const obj = JSON.parse(renderError(e, 'json'));
     expect(obj).toEqual({
+      contractVersion: '1.0',
       error: {
         category: 'DATASOURCE_NOT_FOUND',
         message: "未知 --ds 'prd'",

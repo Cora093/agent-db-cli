@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatCsv,
-  toNdjson,
   rowsToObjects,
   formatTable,
   buildInlineJson,
@@ -45,27 +44,23 @@ describe('rowsToObjects', () => {
   it('按列名映射成对象,保留 null', () => {
     expect(rowsToObjects(['id', 'name'], [['1', null]])).toEqual([{ id: '1', name: null }]);
   });
-});
 
-describe('toNdjson (§9 落盘格式)', () => {
-  it('一行一个 row 对象,行末换行,null 自描述', () => {
-    const nd = toNdjson(['id', 'name'], [
-      ['1', 'ACME'],
-      ['2', null],
+  it('重复列名使用稳定后缀且不丢值', () => {
+    expect(rowsToObjects(['id', 'id', 'id'], [[1, 2, 3]])).toEqual([
+      { id: 1, 'id#2': 2, 'id#3': 3 },
     ]);
-    expect(nd).toBe('{"id":"1","name":"ACME"}\n{"id":"2","name":null}\n');
   });
 
-  it('空结果返回空串', () => {
-    expect(toNdjson(['a'], [])).toBe('');
-  });
-
-  it('每行可被独立 JSON.parse(便于 Read/Grep 切片)', () => {
-    const nd = toNdjson(['n'], [[1], [2], [3]]);
-    const objs = nd.trimEnd().split('\n').map((l) => JSON.parse(l));
-    expect(objs).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
+  it('原始标签含后缀时仍生成全局唯一 key', () => {
+    expect(rowsToObjects(['x', 'x', 'x#2'], [[1, 2, 3]])).toEqual([
+      { x: 1, 'x#3': 2, 'x#2': 3 },
+    ]);
+    expect(rowsToObjects(['x', 'x#2', 'x', 'x#3', 'x'], [[1, 2, 3, 4, 5]])).toEqual([
+      { x: 1, 'x#2': 2, 'x#4': 3, 'x#3': 4, 'x#5': 5 },
+    ]);
   });
 });
+
 
 describe('formatTable (§9 给人看)', () => {
   it('对齐列 + 分隔线 + 脚注;NULL 显式打印', () => {
@@ -99,13 +94,24 @@ describe('buildInlineJson (§9a)', () => {
       ['9007199254740994', null],
     ], 12, false);
     expect(obj).toEqual({
+      contractVersion: '1.0',
       ds: 'prod-mysql-ro',
       columns: ['id', 'status'],
       rows: [
         ['9007199254740993', 'paid'],
         ['9007199254740994', null],
       ],
-      meta: { rowCount: 2, ms: 12, truncated: false, spillPath: null },
+      meta: {
+        rowCount: 2,
+        deliveredRowCount: 2,
+        ms: 12,
+        queryTruncated: false,
+        deliveryOmittedRows: 0,
+        mode: 'inline',
+        spillPath: null,
+        outPath: null,
+        bytes: null,
+      },
     });
   });
 });
@@ -123,11 +129,16 @@ describe('buildSpillJson (§9b)', () => {
     expect(obj.columns).toEqual(['n']);
     expect(obj.preview).toHaveLength(50);
     expect(obj.preview[0]).toEqual(['0']);
+    expect(obj.contractVersion).toBe('1.0');
     expect(obj.meta).toEqual({
       rowCount: 120,
+      deliveredRowCount: 50,
       ms: 30,
-      truncated: true,
+      queryTruncated: true,
+      deliveryOmittedRows: 70,
+      mode: 'preview',
       spillPath: '/tmp/agent-db-cli/x.ndjson',
+      outPath: null,
       bytes: 327680,
     });
   });

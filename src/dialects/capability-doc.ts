@@ -18,8 +18,7 @@ export function renderDriverCapabilityTable(): string {
   const divider = '|---|---|---:|---|---|---|---|---|';
   const rows = DRIVER_NAMES.map((name) => {
     const d = getDriverDescriptor(name);
-    const c = d.capabilities;
-    return `| \`${name}\` | ${d.protocol} | ${d.connection.defaultPort} | ${labels.introspection[c.introspection]} | ${labels.transaction[c.readOnlyTransaction]} | ${labels.timeout[c.timeoutUnit]} | ${labels.cancellation[c.cancellation]} | ${labels.limit[c.limit]} |`;
+    return `| \`${name}\` | ${d.protocol} | ${d.connection.defaultPort} | ${labels.introspection[d.introspection]} | ${labels.transaction[d.execution.readOnlyTransaction.strength]} | ${labels.timeout[d.execution.timeout.unit]} | ${labels.cancellation['connection-close']} | ${labels.limit[d.limit]} |`;
   });
   return [header, divider, ...rows].join('\n');
 }

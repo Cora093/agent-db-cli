@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { guardSql } from '../src/safety/guard.js';
 import { AppError, type ErrorCategory } from '../src/errors.js';
 
-function category(sql: string): ErrorCategory | 'OK' {
+function category(sql: string, driver: 'mysql' | 'postgres' | 'dm'): ErrorCategory | 'OK' {
   try {
-    guardSql(sql);
+    guardSql(sql, driver);
     return 'OK';
   } catch (e) {
     if (e instanceof AppError) return e.category;
@@ -14,72 +14,72 @@ function category(sql: string): ErrorCategory | 'OK' {
 
 describe('guardSql — 放行 (§7 allowlist)', () => {
   it('SELECT 放行,kind=select', () => {
-    expect(guardSql('SELECT 1')).toEqual({ sql: 'SELECT 1', kind: 'select' });
+    expect(guardSql('SELECT 1', 'mysql')).toEqual({ sql: 'SELECT 1', kind: 'select' });
   });
 
   it('大小写无关', () => {
-    expect(guardSql('select * from t where x=1').kind).toBe('select');
+    expect(guardSql('select * from t where x=1', 'mysql').kind).toBe('select');
   });
 
   it('首尾空白被裁剪', () => {
-    expect(guardSql('   SELECT 1   ').sql).toBe('SELECT 1');
+    expect(guardSql('   SELECT 1   ', 'mysql').sql).toBe('SELECT 1');
   });
 
   it('去除结尾分号(单语句仍放行)', () => {
-    expect(guardSql('SELECT 1;')).toEqual({ sql: 'SELECT 1', kind: 'select' });
+    expect(guardSql('SELECT 1;', 'mysql')).toEqual({ sql: 'SELECT 1', kind: 'select' });
   });
 
   it('WITH ... SELECT → kind=with', () => {
-    const r = guardSql('WITH x AS (SELECT 1) SELECT * FROM x');
+    const r = guardSql('WITH x AS (SELECT 1) SELECT * FROM x', 'mysql');
     expect(r.kind).toBe('with');
   });
 
   it('SHOW / EXPLAIN / DESCRIBE / DESC 放行', () => {
-    expect(guardSql('SHOW TABLES').kind).toBe('show');
-    expect(guardSql('EXPLAIN SELECT 1').kind).toBe('explain');
-    expect(guardSql('DESCRIBE t').kind).toBe('describe');
-    expect(guardSql('DESC t').kind).toBe('describe');
+    expect(guardSql('SHOW TABLES', 'mysql').kind).toBe('show');
+    expect(guardSql('EXPLAIN SELECT 1', 'mysql').kind).toBe('explain');
+    expect(guardSql('DESCRIBE t', 'mysql').kind).toBe('describe');
+    expect(guardSql('DESC t', 'mysql').kind).toBe('describe');
   });
 
   it('EXPLAIN ANALYZE INSERT 由守卫放行(交 ② 只读事务挡)', () => {
-    expect(guardSql('EXPLAIN ANALYZE INSERT INTO t VALUES (1)').kind).toBe('explain');
+    expect(guardSql('EXPLAIN ANALYZE INSERT INTO t VALUES (1)', 'mysql').kind).toBe('explain');
   });
 
   it('前导括号不影响首关键字识别', () => {
-    expect(guardSql('(SELECT 1)').kind).toBe('select');
-    expect(guardSql('  ((SELECT 1 UNION SELECT 2))').kind).toBe('select');
+    expect(guardSql('(SELECT 1)', 'mysql').kind).toBe('select');
+    expect(guardSql('  ((SELECT 1 UNION SELECT 2))', 'mysql').kind).toBe('select');
   });
 });
 
 describe('guardSql — 注释处理', () => {
   it('行注释 -- 被剥离,仍识别 SELECT', () => {
-    expect(guardSql('-- pick one\nSELECT 1').kind).toBe('select');
+    expect(guardSql('-- pick one\nSELECT 1', 'mysql').kind).toBe('select');
   });
 
   it('块注释在关键字前被剥离', () => {
-    expect(guardSql('/* hello */ SELECT 1').kind).toBe('select');
+    expect(guardSql('/* hello */ SELECT 1', 'mysql').kind).toBe('select');
   });
 
   it('注释里的分号不算多语句', () => {
-    expect(category('SELECT 1 /* ; DROP TABLE t */')).toBe('OK');
+    expect(category('SELECT 1 /* ; DROP TABLE t */', 'mysql')).toBe('OK');
   });
 
   it('注释里的 DROP 不改变首关键字', () => {
-    expect(guardSql('SELECT 1 -- ; DROP TABLE t').kind).toBe('select');
+    expect(guardSql('SELECT 1 -- ; DROP TABLE t', 'mysql').kind).toBe('select');
   });
 });
 
 describe('guardSql — 引号感知', () => {
   it('字符串里的分号不算多语句', () => {
-    expect(category("SELECT 'a; b' AS s")).toBe('OK');
+    expect(category("SELECT 'a; b' AS s", 'mysql')).toBe('OK');
   });
 
   it('字符串里的 outfile 不触发文件写拦截', () => {
-    expect(category("SELECT 'into outfile xx' AS s")).toBe('OK');
+    expect(category("SELECT 'into outfile xx' AS s", 'mysql')).toBe('OK');
   });
 
   it('双引号标识符里的分号被保护', () => {
-    expect(category('SELECT "a;b" FROM t')).toBe('OK');
+    expect(category('SELECT "a;b" FROM t', 'mysql')).toBe('OK');
   });
 });
 
@@ -106,40 +106,40 @@ describe('guardSql — 拦截非只读首关键字 (exit 2)', () => {
     'KILL 1',
   ]) {
     it(`拦截: ${sql}`, () => {
-      expect(category(sql)).toBe('BLOCKED_NON_READONLY');
+      expect(category(sql, 'mysql')).toBe('BLOCKED_NON_READONLY');
     });
   }
 });
 
 describe('guardSql — 多语句拦截 (exit 2)', () => {
   it('SELECT; DROP 被拦', () => {
-    expect(category('SELECT 1; DROP TABLE t')).toBe('BLOCKED_MULTI_STATEMENT');
+    expect(category('SELECT 1; DROP TABLE t', 'mysql')).toBe('BLOCKED_MULTI_STATEMENT');
   });
 
   it('两条 SELECT 也算多语句', () => {
-    expect(category('SELECT 1; SELECT 2')).toBe('BLOCKED_MULTI_STATEMENT');
+    expect(category('SELECT 1; SELECT 2', 'mysql')).toBe('BLOCKED_MULTI_STATEMENT');
   });
 
   it('引号内分号后接真实第二语句被拦', () => {
-    expect(category("SELECT 'x'; DROP TABLE t")).toBe('BLOCKED_MULTI_STATEMENT');
+    expect(category("SELECT 'x'; DROP TABLE t", 'mysql')).toBe('BLOCKED_MULTI_STATEMENT');
   });
 
   it('结尾多个空分号不算多语句', () => {
-    expect(category('SELECT 1 ; ; ')).toBe('OK');
+    expect(category('SELECT 1 ; ; ', 'mysql')).toBe('OK');
   });
 });
 
 describe('guardSql — INTO OUTFILE/DUMPFILE 特例黑名单 (exit 2)', () => {
   it('SELECT ... INTO OUTFILE 被拦', () => {
-    expect(category("SELECT * INTO OUTFILE '/tmp/x' FROM t")).toBe('BLOCKED_FILE_WRITE');
+    expect(category("SELECT * INTO OUTFILE '/tmp/x' FROM t", 'mysql')).toBe('BLOCKED_FILE_WRITE');
   });
 
   it('SELECT ... INTO DUMPFILE 被拦', () => {
-    expect(category("SELECT a INTO DUMPFILE '/tmp/x' FROM t")).toBe('BLOCKED_FILE_WRITE');
+    expect(category("SELECT a INTO DUMPFILE '/tmp/x' FROM t", 'mysql')).toBe('BLOCKED_FILE_WRITE');
   });
 
   it('大小写无关', () => {
-    expect(category("select 1 into outfile '/x'")).toBe('BLOCKED_FILE_WRITE');
+    expect(category("select 1 into outfile '/x'", 'mysql')).toBe('BLOCKED_FILE_WRITE');
   });
 });
 
@@ -156,24 +156,24 @@ describe('guardSql — 锁读拦截 (D1, exit 2)', () => {
     'SELECT * FROM (SELECT id FROM t FOR UPDATE) s',
   ]) {
     it(`拦截: ${sql}`, () => {
-      expect(category(sql)).toBe('BLOCKED_LOCKING_READ');
+      expect(category(sql, 'mysql')).toBe('BLOCKED_LOCKING_READ');
     });
   }
 
   it("不误伤:字符串字面量 'for update'", () => {
-    expect(category("SELECT * FROM t WHERE note = 'for update'")).toBe('OK');
+    expect(category("SELECT * FROM t WHERE note = 'for update'", 'mysql')).toBe('OK');
   });
 
   it("不误伤:字符串字面量 'lock in share mode'", () => {
-    expect(category("SELECT 'lock in share mode' AS s")).toBe('OK');
+    expect(category("SELECT 'lock in share mode' AS s", 'mysql')).toBe('OK');
   });
 
   it('不误伤:列名 for_update_flag', () => {
-    expect(category('SELECT for_update_flag FROM t')).toBe('OK');
+    expect(category('SELECT for_update_flag FROM t', 'mysql')).toBe('OK');
   });
 
   it('不误伤:反引号标识符 `for`', () => {
-    expect(category('SELECT `for` FROM t')).toBe('OK');
+    expect(category('SELECT `for` FROM t', 'mysql')).toBe('OK');
   });
 });
 
@@ -234,19 +234,16 @@ describe('guardSql — 词法方言化 (G)', () => {
     expect(r.sql).toBe('SELECT a# FROM t');
   });
 
-  it('缺省(未传 driver)按 MySQL 语义,存量行为不变', () => {
-    expect(guardSql('SELECT 1 # c\n').sql).toBe('SELECT 1');
-  });
 });
 
 describe('guardSql — 空输入', () => {
   it('空串 → BAD_USAGE', () => {
-    expect(category('')).toBe('BAD_USAGE');
+    expect(category('', 'mysql')).toBe('BAD_USAGE');
   });
   it('纯空白 → BAD_USAGE', () => {
-    expect(category('   \n  ')).toBe('BAD_USAGE');
+    expect(category('   \n  ', 'mysql')).toBe('BAD_USAGE');
   });
   it('纯注释 → BAD_USAGE', () => {
-    expect(category('-- nothing here')).toBe('BAD_USAGE');
+    expect(category('-- nothing here', 'mysql')).toBe('BAD_USAGE');
   });
 });

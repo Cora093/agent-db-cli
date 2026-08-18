@@ -1,24 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { AppError, exitCodeFor, toAppError } from '../src/errors.js';
+import { AppError, toAppError, type ErrorCategory } from '../src/errors.js';
 
 describe('exit code contract (§9c)', () => {
-  it('guard blocks exit with 2', () => {
-    expect(exitCodeFor('BLOCKED_NON_READONLY')).toBe(2);
-    expect(exitCodeFor('BLOCKED_MULTI_STATEMENT')).toBe(2);
-    expect(exitCodeFor('BLOCKED_FILE_WRITE')).toBe(2);
-  });
-
-  it('timeout exits 3, connect 4, datasource-not-found 5', () => {
-    expect(exitCodeFor('TIMEOUT')).toBe(3);
-    expect(exitCodeFor('CONNECT')).toBe(4);
-    expect(exitCodeFor('DATASOURCE_NOT_FOUND')).toBe(5);
-  });
-
-  it('everything else exits 1', () => {
-    expect(exitCodeFor('SQL_SYNTAX')).toBe(1);
-    expect(exitCodeFor('AMBIGUOUS_TABLE')).toBe(1);
-    expect(exitCodeFor('NOT_READONLY')).toBe(1);
-    expect(exitCodeFor('INTERNAL')).toBe(1);
+  it.each([
+    ['BLOCKED_NON_READONLY', 2],
+    ['BLOCKED_MULTI_STATEMENT', 2],
+    ['BLOCKED_FILE_WRITE', 2],
+    ['BLOCKED_LOCKING_READ', 2],
+    ['TIMEOUT', 3],
+    ['CONNECT', 4],
+    ['DATASOURCE_NOT_FOUND', 5],
+    ['SQL_SYNTAX', 1],
+    ['AMBIGUOUS_TABLE', 1],
+    ['NOT_READONLY', 1],
+    ['INTERNAL', 1],
+  ] satisfies [ErrorCategory, number][])('%s exits %i', (category, exitCode) => {
+    expect(new AppError(category, 'test').exitCode).toBe(exitCode);
   });
 });
 

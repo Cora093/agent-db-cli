@@ -39,7 +39,7 @@ describe('driver descriptor registry', () => {
     for (const name of EXPECTED) {
       expect(isDriverName(name)).toBe(true);
       expect(getDriverDescriptor(name).name).toBe(name);
-      expect(getDialect(name).driver).toBe(name);
+      expect(getDialect(name)).toBeDefined();
     }
     expect(isDriverName('oracle')).toBe(false);
   });
@@ -57,15 +57,16 @@ describe('driver descriptor registry', () => {
     });
     expect(descriptor.connection.options.allow).toBeInstanceOf(Array);
     expect(descriptor.connection.options.force).toBeTypeOf('object');
-    expect(descriptor.capabilities).toEqual({
-      introspection: expect.stringMatching(/^(full|best-effort)$/),
-      readOnlyTransaction: descriptor.execution.readOnlyTransaction.strength,
-      timeoutUnit: descriptor.execution.timeout.unit,
-      cancellation: 'connection-close',
-      limit: expect.stringMatching(
-        /^sql-rewrite\+(stream|cursor|result-set\+driver-max-rows)$/,
-      ),
-    });
+    expect(descriptor.introspection).toMatch(/^(full|best-effort)$/);
+    expect(descriptor.execution.readOnlyTransaction.strength).toMatch(
+      /^(strong|dml-only|account-only)$/,
+    );
+    expect(descriptor.execution.timeout.unit).toMatch(
+      /^(milliseconds|seconds|microseconds|none)$/,
+    );
+    expect(descriptor.limit).toMatch(
+      /^sql-rewrite\+(stream|cursor|result-set\+driver-max-rows)$/,
+    );
     expect(descriptor.createDialect()).toBeDefined();
   });
 
@@ -80,7 +81,7 @@ describe('driver descriptor registry', () => {
     const raw = fakeRaw(name, calls);
     const conn = name === 'dm'
       ? createDmConn(raw as never)
-      : ({ driver: name, raw, close: vi.fn() } as unknown as Conn);
+      : ({ raw, close: vi.fn() } as unknown as Conn);
 
     await dialect.runReadOnly(conn, 'SELECT 1', { kind: 'select', limit: 10, timeoutMs: 1500 });
 

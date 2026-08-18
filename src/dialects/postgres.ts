@@ -13,7 +13,6 @@ import type {
   ForeignKeyInfo,
 } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
-import type { DriverName } from '../types.js';
 import type { ExecutionPolicy } from './descriptors.js';
 import { AppError } from '../errors.js';
 import { createRowCollector, planLimit } from './sql-util.js';
@@ -88,10 +87,6 @@ const PG_TYPES: pg.CustomTypesConfig = {
 export class PgDialect implements Dialect {
   constructor(private readonly config: { defaultPort: number; execution: ExecutionPolicy }) {}
 
-  get driver(): DriverName {
-    return 'postgres';
-  }
-
   async connect(cfg: ResolvedDatasource): Promise<Conn> {
     const client = new pg.Client({
       host: cfg.host,
@@ -108,7 +103,6 @@ export class PgDialect implements Dialect {
       throw classifyPgError(err, 'connect');
     }
     return {
-      driver: 'postgres',
       raw: client,
       defaultSchema: cfg.schema,
       close: async () => {

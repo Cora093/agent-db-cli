@@ -56,8 +56,10 @@ describe('CLI run() — 无需 DB 的路径', () => {
     expect(obj.output.formats).toContain('ndjson');
     expect(obj.statements.keywords).toContain('describe');
     expect(obj.statements.aliases).toEqual({ desc: 'describe' });
-    expect(obj.drivers.find((driver: { driver: string }) => driver.driver === 'dm').introspection)
-      .toBe('best-effort');
+    const dm = obj.drivers.find((driver: { driver: string }) => driver.driver === 'dm');
+    expect(dm.introspection).toBe('best-effort');
+    expect(dm.timeoutUnit).toBe('none');
+    expect(dm).not.toHaveProperty('serverStatementTimeout');
     expect(obj.drivers.map((driver: { driver: string }) => driver.driver)).toEqual([
       'mysql',
       'doris',

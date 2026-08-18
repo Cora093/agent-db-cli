@@ -1,6 +1,5 @@
 import type { ColKind, Dialect, Conn, RunOptions, QueryResult, TableInfo, TableSchema } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
-import type { DriverName } from '../types.js';
 import type { ExecutionPolicy } from './descriptors.js';
 import { AppError } from '../errors.js';
 import { createRowCollector, planLimit } from './sql-util.js';
@@ -108,10 +107,6 @@ function dmColKinds(meta: DmColumnMeta[]): ColKind[] {
  */
 export class DmDialect implements Dialect {
   constructor(private readonly config: { defaultPort: number; execution: ExecutionPolicy }) {}
-
-  get driver(): DriverName {
-    return 'dm';
-  }
 
   async connect(cfg: ResolvedDatasource): Promise<Conn> {
     let dmdb: DmModule;
@@ -305,7 +300,6 @@ const dmTransport = {
 export function createDmConn(raw: DmRawConnection, defaultSchema?: string, user = 'TEST'): Conn {
   let state: DmConnState = 'open';
   const conn: DmConn = {
-    driver: 'dm',
     raw,
     defaultSchema,
     user,

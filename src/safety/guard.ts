@@ -30,9 +30,8 @@ interface Statement {
   masked: string;
 }
 
-/** 未指明 driver 时沿用存量 MySQL 词法;有 driver 时 descriptor 是唯一事实来源。 */
-function lexFor(driver?: DriverName): LexProfile {
-  return getDriverDescriptor(driver ?? 'mysql').lex;
+function lexFor(driver: DriverName): LexProfile {
+  return getDriverDescriptor(driver).lex;
 }
 
 /**
@@ -44,7 +43,7 @@ function lexFor(driver?: DriverName): LexProfile {
  * sanitize 已按引擎词法对齐,不再发生语义篡改(G1/G2)。
  * 真边界永远是 ①只读账号 + ②只读事务;此处只做早拦 + 友好报错。
  */
-export function guardSql(rawSql: string, driver?: DriverName): GuardResult {
+export function guardSql(rawSql: string, driver: DriverName): GuardResult {
   const statements = scan(rawSql, lexFor(driver));
 
   if (statements.length === 0) {

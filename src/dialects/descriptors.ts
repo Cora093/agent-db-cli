@@ -48,14 +48,6 @@ export interface ExecutionPolicy {
   readonly readOnlyTransaction: ReadOnlyTransactionPolicy;
 }
 
-export interface DriverCapabilities {
-  readonly introspection: IntrospectionCapability;
-  readonly readOnlyTransaction: ReadOnlyTransactionStrength;
-  readonly timeoutUnit: TimeoutUnit;
-  readonly cancellation: 'connection-close';
-  readonly limit: LimitCapability;
-}
-
 export interface DriverDescriptor {
   readonly name: DriverName;
   readonly protocol: ProtocolProfile;
@@ -65,7 +57,8 @@ export interface DriverDescriptor {
     readonly options: OptionPolicy;
   };
   readonly execution: ExecutionPolicy;
-  readonly capabilities: DriverCapabilities;
+  readonly introspection: IntrospectionCapability;
+  readonly limit: LimitCapability;
   readonly createDialect: () => Dialect;
 }
 
@@ -132,14 +125,12 @@ function defineDescriptor(config: {
   execution: ExecutionPolicy;
   limit: LimitCapability;
   createDialect: (runtime: {
-    driver: DriverName;
     defaultPort: number;
     introspection: IntrospectionCapability;
     execution: ExecutionPolicy;
   }) => Dialect;
 }): DriverDescriptor {
   const runtime = {
-    driver: config.name,
     defaultPort: config.defaultPort,
     introspection: config.introspection,
     execution: config.execution,
@@ -150,13 +141,8 @@ function defineDescriptor(config: {
     lex: config.lex,
     connection: { defaultPort: config.defaultPort, options: config.options },
     execution: config.execution,
-    capabilities: {
-      introspection: config.introspection,
-      readOnlyTransaction: config.execution.readOnlyTransaction.strength,
-      timeoutUnit: config.execution.timeout.unit,
-      cancellation: 'connection-close',
-      limit: config.limit,
-    },
+    introspection: config.introspection,
+    limit: config.limit,
     createDialect: () => config.createDialect(runtime),
   };
 }

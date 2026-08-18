@@ -26,12 +26,11 @@ export function getCapabilities(): object {
         driver,
         protocol: descriptor.protocol,
         defaultPort: descriptor.connection.defaultPort,
-        introspection: descriptor.capabilities.introspection,
-        readOnlyTransaction: descriptor.capabilities.readOnlyTransaction,
-        serverStatementTimeout: descriptor.capabilities.timeoutUnit !== 'none',
-        timeoutUnit: descriptor.capabilities.timeoutUnit,
-        cancellation: descriptor.capabilities.cancellation,
-        rowLimit: descriptor.capabilities.limit,
+        introspection: descriptor.introspection,
+        readOnlyTransaction: descriptor.execution.readOnlyTransaction.strength,
+        timeoutUnit: descriptor.execution.timeout.unit,
+        cancellation: 'connection-close',
+        rowLimit: descriptor.limit,
       };
     }),
   });

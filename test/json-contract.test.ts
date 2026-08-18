@@ -8,7 +8,7 @@ import { getCapabilities } from '../src/capabilities.js';
 import { AppError } from '../src/errors.js';
 import type { DatasourceConfig, Datasources } from '../src/config/types.js';
 
-const connect = vi.fn(async () => ({ driver: 'mysql' as const, close: vi.fn(async () => undefined) }));
+const connect = vi.fn(async () => ({ close: vi.fn(async () => undefined) }));
 const listTables = vi.fn(async () => [{ schema: 'app', name: 'orders', type: 'BASE TABLE' }]);
 const getSchema = vi.fn(async () => ({
   schema: 'app',
@@ -28,7 +28,6 @@ vi.mock('../src/dialects/registry.js', async (importOriginal) => {
   return {
     ...actual,
     getDialect: vi.fn(() => ({
-      driver: 'mysql',
       connect,
       listTables,
       getSchema,

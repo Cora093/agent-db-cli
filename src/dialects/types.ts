@@ -1,4 +1,4 @@
-import type { DriverName, SqlValue, StatementKind } from '../types.js';
+import type { SqlValue, StatementKind } from '../types.js';
 import type { ResolvedDatasource } from '../config/types.js';
 
 /**
@@ -6,7 +6,6 @@ import type { ResolvedDatasource } from '../config/types.js';
  * 对上层只暴露 close()。Dialect 方法内部 downcast 回自己的具体类型。
  */
 export interface Conn {
-  readonly driver: DriverName;
   /** 协议级取消后连接已被销毁,调用方不得再 rollback/end。 */
   readonly discarded?: boolean;
   close(): Promise<void>;
@@ -134,7 +133,6 @@ export interface TableSchema {
  * 上层只面向接口,由注册表按 driver 分发。
  */
 export interface Dialect {
-  readonly driver: DriverName;
 
   connect(cfg: ResolvedDatasource): Promise<Conn>;
 

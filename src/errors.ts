@@ -84,10 +84,6 @@ export class AppError extends Error {
   }
 }
 
-export function exitCodeFor(category: ErrorCategory): number {
-  return EXIT_CODES[category];
-}
-
 /** 把任意 throwable 归一成 AppError(未知错误归 INTERNAL)。 */
 export function toAppError(err: unknown): AppError {
   if (err instanceof AppError) return err;

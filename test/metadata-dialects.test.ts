@@ -3,7 +3,14 @@ import { MysqlFamilyDialect, type MysqlConn } from '../src/dialects/mysql-family
 import { PgDialect, type PgConn } from '../src/dialects/postgres.js';
 import { DmDialect, type DmConn } from '../src/dialects/dm.js';
 
-const mysqlDialect = () => new MysqlFamilyDialect({ driver: 'mysql', readOnlyTxn: null, timeoutSql: () => null, introspection: 'full' });
+const mysqlDialect = () => new MysqlFamilyDialect({
+  defaultPort: 3306,
+  introspection: 'full',
+  execution: {
+    timeout: { unit: 'none' },
+    readOnlyTransaction: { strength: 'account-only' },
+  },
+});
 
 describe('MySQL metadata fallbacks', () => {
   it('downgrades only constraints when CHECK_CONSTRAINTS is unavailable', async () => {
@@ -15,7 +22,7 @@ describe('MySQL metadata fallbacks', () => {
       if (sql.includes('REFERENTIAL_CONSTRAINTS')) return [[{ CONSTRAINT_NAME: 'fk_team', COLUMN_NAME: 'team_id', REFERENCED_TABLE_SCHEMA: 'app', REFERENCED_TABLE_NAME: 'teams', REFERENCED_COLUMN_NAME: 'id', UPDATE_RULE: 'CASCADE', DELETE_RULE: 'RESTRICT' }]];
       throw new Error(sql);
     };
-    const conn = { driver: 'mysql', database: 'app', raw: { query }, close: async () => {} } as unknown as MysqlConn;
+    const conn = { database: 'app', raw: { query }, close: async () => {} } as unknown as MysqlConn;
     const schema = await mysqlDialect().getSchema(conn, 'users');
     expect(schema.primaryKey).toMatchObject({ status: 'full', data: ['id'] });
     expect(schema.indexes.status).toBe('full');
@@ -36,8 +43,14 @@ describe('PostgreSQL metadata fidelity', () => {
       if (sql.includes('pg_get_viewdef')) return { rows: [{ type: 'VIEW', comment: 'active users', view_definition: 'SELECT * FROM users WHERE active' }] };
       throw new Error(sql);
     };
-    const conn = { driver: 'postgres', defaultSchema: 'public', raw: { query }, close: async () => {} } as unknown as PgConn;
-    const schema = await new PgDialect().getSchema(conn, 'active_users');
+    const conn = { defaultSchema: 'public', raw: { query }, close: async () => {} } as unknown as PgConn;
+    const schema = await new PgDialect({
+      defaultPort: 5432,
+      execution: {
+        timeout: { unit: 'none' },
+        readOnlyTransaction: { strength: 'account-only' },
+      },
+    }).getSchema(conn, 'active_users');
     expect(schema.indexes.data[0]).toMatchObject({ columns: ['lower(email)', 'tenant_id', 'created_at'], predicate: 'active' });
     expect(schema.indexes.data[0].definition).toContain('INCLUDE (created_at)');
     expect(schema.foreignKeys.data[0]).toMatchObject({ onUpdate: 'CASCADE', onDelete: 'RESTRICT' });
@@ -49,8 +62,15 @@ describe('PostgreSQL metadata fidelity', () => {
 describe('DM metadata truthfulness', () => {
   it('derives visible namespaces and reports best-effort', async () => {
     const execute = async () => ({ metaData: [{ name: 'OWNER' }], rows: [['APP'], ['SYS']] });
-    const conn = { driver: 'dm', user: 'APP', raw: { execute }, close: async () => {} } as unknown as DmConn;
-    const result = await new DmDialect().listNamespaces(conn);
+    const conn = { user: 'APP', raw: { execute }, close: async () => {} } as unknown as DmConn;
+    const result = await new DmDialect({
+      defaultPort: 5236,
+      introspection: 'best-effort',
+      execution: {
+        timeout: { unit: 'none' },
+        readOnlyTransaction: { strength: 'account-only' },
+      },
+    }).listNamespaces(conn);
     expect(result.status).toBe('best-effort');
     expect(result.data).toEqual([{ name: 'APP', system: false }, { name: 'SYS', system: true }]);
   });

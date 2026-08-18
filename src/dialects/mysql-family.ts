@@ -13,14 +13,12 @@ import type {
   IntrospectionStatus,
 } from './types.js';
 import type { ResolvedDatasource } from '../config/types.js';
-import type { DriverName } from '../types.js';
 import type { ExecutionPolicy, IntrospectionCapability } from './descriptors.js';
 import { AppError } from '../errors.js';
 import { createRowCollector, planLimit } from './sql-util.js';
 import { classifyMysqlError } from './db-error.js';
 
 export interface FamilyParams {
-  driver: DriverName;
   defaultPort: number;
   introspection: IntrospectionCapability;
   execution: ExecutionPolicy;
@@ -65,10 +63,6 @@ function colKinds(fields: mysql.FieldPacket[]): ColKind[] {
 export class MysqlFamilyDialect implements Dialect {
   constructor(private readonly p: FamilyParams) {}
 
-  get driver(): DriverName {
-    return this.p.driver;
-  }
-
   async connect(cfg: ResolvedDatasource): Promise<Conn> {
     let raw: mysql.Connection;
     try {
@@ -92,7 +86,6 @@ export class MysqlFamilyDialect implements Dialect {
       throw classifyMysqlError(err, 'connect');
     }
     const conn = {
-      driver: this.driver,
       raw,
       database: cfg.database,
       discarded: false,

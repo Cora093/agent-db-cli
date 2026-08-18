@@ -14,16 +14,12 @@ const ds = { id: 'd', driver: 'mysql' as const, host: 'h', user: 'u', password: 
 
 function dialect(run: (opts: RunOptions) => Promise<QueryResult>): Dialect {
   return {
-    driver: 'mysql',
-    connect: async () => ({ driver: 'mysql', close: vi.fn(async () => undefined) }),
+    connect: async () => ({ close: vi.fn(async () => undefined) }),
     runReadOnly: async (_conn, _sql, opts) => run(opts),
-    readOnlyTxnSQL: () => null,
-    needsAutocommitOff: () => false,
-    statementTimeoutSQL: () => null,
+    listNamespaces: async () => ({ status: 'full', data: [] }),
     listTables: async () => [],
     getSchema: async () => { throw new Error('unused'); },
-    mapType: () => null,
-  };
+  } satisfies Dialect;
 }
 
 describe('queryCommand streamed output orchestration', () => {
@@ -51,7 +47,7 @@ describe('queryCommand streamed output orchestration', () => {
       columns: ['n'], rows: [[1]], rowCount: 1, resultBytes: 3,
       truncated: true, truncationReason: 'row-limit', ms: 2,
     }));
-    discardedDialect.connect = async () => ({ driver: 'mysql', discarded: true, close });
+    discardedDialect.connect = async () => ({ discarded: true, close });
     const out = await queryCommand(ds, 'SELECT 1', {
       limit: 1, timeoutMs: 1000, noSpill: true,
     }, 'json', {}, { getDialect: () => discardedDialect });

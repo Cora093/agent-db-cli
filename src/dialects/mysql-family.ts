@@ -106,8 +106,8 @@ export class MysqlFamilyDialect implements Dialect {
         await c.raw.query(readOnlyTransaction.beginSql);
       }
 
-      const plan = planLimit(sql, opts.kind, opts.limit + 1);
-      return await readMysqlRows(c.raw, plan.sql, opts, start, () => { c.discarded = true; });
+      const boundedSql = planLimit(sql, opts.kind, opts.limit + 1);
+      return await readMysqlRows(c.raw, boundedSql, opts, start, () => { c.discarded = true; });
     } catch (err) {
       throw classifyMysqlError(err);
     } finally {

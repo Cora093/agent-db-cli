@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyLimit, mapRows } from '../src/dialects/sql-util.js';
+import { applyLimit, createRowCollector } from '../src/dialects/sql-util.js';
 
 describe('applyLimit (§9b 500 硬顶 / LIMIT 501 改写)', () => {
   it('SELECT 无 LIMIT → 追加', () => {
@@ -142,37 +142,41 @@ describe('applyLimit — 加固(C:字面量遮罩 / 超大界夹紧 / TOP/ROWNUM
   });
 });
 
-describe('mapRows (R2 共享尾段:截断 + ColKind 归一化)', () => {
+describe('createRowCollector (R2 共享尾段:截断 + ColKind 归一化)', () => {
   it('行数 ≤ limit:不截断,按 kind 归一化', () => {
-    const r = mapRows(
-      [
-        ['1', '12000.50', '{"a":1}'],
-        ['2', '9000.00', null],
-      ],
+    const collector = createRowCollector(
       ['id', 'salary', 'meta'],
       ['int', 'decimal', 'json'],
       500,
       Date.now(),
     );
-    expect(r.truncated).toBe(false);
-    expect(r.rows).toEqual([
+    expect(collector.add(['1', '12000.50', '{"a":1}'])).toBe(true);
+    expect(collector.add(['2', '9000.00', null])).toBe(true);
+
+    const result = collector.finish();
+    expect(result.truncated).toBe(false);
+    expect(result.rows).toEqual([
       [1, '12000.50', { a: 1 }],
       [2, '9000.00', null],
     ]);
-    expect(r.columns).toEqual(['id', 'salary', 'meta']);
-    expect(r.ms).toBeGreaterThanOrEqual(0);
+    expect(result.columns).toEqual(['id', 'salary', 'meta']);
+    expect(result.ms).toBeGreaterThanOrEqual(0);
   });
 
   it('行数 > limit:截到 limit 并标 truncated', () => {
-    const raw = Array.from({ length: 6 }, (_, i) => [String(i)]);
-    const r = mapRows(raw, ['n'], ['int'], 5, Date.now());
-    expect(r.truncated).toBe(true);
-    expect(r.rows).toHaveLength(5);
-    expect(r.rows[0]).toEqual([0]);
+    const collector = createRowCollector(['n'], ['int'], 5, Date.now());
+    for (let i = 0; i < 5; i++) expect(collector.add([String(i)])).toBe(true);
+    expect(collector.add(['5'])).toBe(false);
+
+    const result = collector.finish();
+    expect(result.truncated).toBe(true);
+    expect(result.rows).toHaveLength(5);
+    expect(result.rows[0]).toEqual([0]);
   });
 
   it('kinds 缺位的列走默认逻辑', () => {
-    const r = mapRows([['x', 42]], ['a', 'b'], ['other'], 10, Date.now());
-    expect(r.rows[0]).toEqual(['x', 42]);
+    const collector = createRowCollector(['a', 'b'], ['other'], 10, Date.now());
+    expect(collector.add(['x', 42])).toBe(true);
+    expect(collector.finish().rows[0]).toEqual(['x', 42]);
   });
 });

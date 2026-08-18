@@ -168,9 +168,9 @@ export class DmDialect implements Dialect {
       return await runWithTimeout(c, opts.timeoutMs, async () => {
         await c.raw.execute(transaction.beginSql, [], { autoCommit: transaction.autoCommit });
 
-        const plan = planLimit(sql, opts.kind, opts.limit + 1);
+        const boundedSql = planLimit(sql, opts.kind, opts.limit + 1);
         // maxRows bounds every statement kind; resultSet avoids materializing all rows in dmdb.
-        const result = await c.raw.execute(plan.sql, [], {
+        const result = await c.raw.execute(boundedSql, [], {
           autoCommit: transaction.autoCommit,
           maxRows: opts.limit + 1,
           resultSet: true,

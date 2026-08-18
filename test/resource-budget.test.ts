@@ -38,18 +38,16 @@ describe('query resource budgets', () => {
     expect(c.finish().rows).toEqual([]);
   });
 
-  it('marks unknown LIMIT/FETCH forms as requiring a driver cap', () => {
-    expect(planLimit('SELECT * FROM t LIMIT ?', 'select', 501)).toMatchObject({
-      serverBounded: false,
-    });
-    expect(planLimit('SELECT * FROM t FETCH FIRST (?) ROWS ONLY', 'select', 501)).toMatchObject({
-      serverBounded: false,
-    });
+  it('preserves unknown LIMIT/FETCH forms for the driver cap', () => {
+    expect(planLimit('SELECT * FROM t LIMIT ?', 'select', 501)).toBe('SELECT * FROM t LIMIT ?');
+    expect(planLimit('SELECT * FROM t FETCH FIRST (?) ROWS ONLY', 'select', 501)).toBe(
+      'SELECT * FROM t FETCH FIRST (?) ROWS ONLY',
+    );
   });
 
-  it('marks every non-select statement kind as requiring a driver cap', () => {
+  it('preserves every non-select statement kind for the driver cap', () => {
     for (const kind of ['show', 'explain', 'describe'] as const) {
-      expect(planLimit(kind.toUpperCase(), kind, 501)).toMatchObject({ serverBounded: false });
+      expect(planLimit(kind.toUpperCase(), kind, 501)).toBe(kind.toUpperCase());
     }
   });
 });

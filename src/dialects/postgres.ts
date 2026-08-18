@@ -127,8 +127,8 @@ export class PgDialect implements Dialect {
         await c.raw.query(`SET search_path TO ${quoteIdent(c.defaultSchema)}`);
       }
 
-      const plan = planLimit(sql, opts.kind, opts.limit + 1);
-      return await readPgRows(c.raw, plan.sql, opts, start);
+      const boundedSql = planLimit(sql, opts.kind, opts.limit + 1);
+      return await readPgRows(c.raw, boundedSql, opts, start);
     } catch (err) {
       throw classifyPgError(err);
     } finally {

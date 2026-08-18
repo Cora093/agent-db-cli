@@ -7,24 +7,6 @@ import { normalizeValue } from './normalize.js';
 export const MAX_RESULT_BYTES = 8 * 1024 * 1024;
 export const MAX_FIELD_BYTES = 1024 * 1024;
 
-/**
- * runReadOnly 共享尾段(R2):截断判定 + 按 ColKind 逐列归一化 + 计时。
- * rawRows 由调用方按 limit+1 取回;start 为查询起始时刻(Date.now())。
- */
-export function mapRows(
-  rawRows: unknown[][],
-  columns: string[],
-  kinds: ColKind[],
-  limit: number,
-  start: number,
-): QueryResult {
-  const collector = createRowCollector(columns, kinds, limit, start);
-  for (const row of rawRows) {
-    if (!collector.add(row)) break;
-  }
-  return collector.finish();
-}
-
 export interface RowCollector {
   /** 返回 false 表示预算已耗尽,调用方必须停止底层读取。 */
   add(rawRow: unknown[]): boolean;
@@ -118,17 +100,10 @@ function valueBytes(value: SqlValue): number {
  *
  * cap 即写入 SQL 的上限值(调用方通常传 limit+1 以判 truncated)。
  */
-export interface LimitPlan {
-  sql: string;
-  serverBounded: boolean;
-  note?: string;
-}
+/** 生成实际执行 SQL。未知 LIMIT/FETCH 形态保持原样,由驱动读取层执行硬顶。 */
+export function planLimit(sql: string, kind: StatementKind, cap: number): string {
+  if (kind !== 'select' && kind !== 'with') return sql;
 
-/** 生成 SQL 限行计划。未知 LIMIT/FETCH 形态显式标记为不可靠,不得静默全量缓冲。 */
-export function planLimit(sql: string, kind: StatementKind, cap: number): LimitPlan {
-  if (kind !== 'select' && kind !== 'with') {
-    return { sql, serverBounded: false, note: `${kind.toUpperCase()} 由驱动读取层执行 ${cap} 行硬顶` };
-  }
   const masked = maskLiterals(sql);
   const hasLimitSyntax = /\blimit\b/i.test(masked) || /\bfetch\s+(first|next)\b/i.test(masked);
   const recognizedLimit =
@@ -136,12 +111,8 @@ export function planLimit(sql: string, kind: StatementKind, cap: number): LimitP
     /\boffset\s+\d+\s+limit\s+\d+\s*$/i.test(masked) ||
     /\blimit\s+all\s*$/i.test(masked) ||
     /\bfetch\s+(?:first|next)\s+\d+\s+rows?\s+(?:only|with\s+ties)\s*$/i.test(masked);
-  const unknown = hasLimitSyntax && !recognizedLimit;
-  const bounded = applyLimit(sql, kind, cap);
-  if (unknown) {
-    return { sql, serverBounded: false, note: '无法可靠识别外层 LIMIT/FETCH,改用驱动读取层硬顶' };
-  }
-  return { sql: bounded, serverBounded: true };
+
+  return hasLimitSyntax && !recognizedLimit ? sql : applyLimit(sql, kind, cap);
 }
 
 export function applyLimit(sql: string, kind: StatementKind, cap: number): string {

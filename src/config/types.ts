@@ -33,8 +33,4 @@ export interface ResolvedDatasource extends Omit<DatasourceConfig, 'password'> {
   safeOptions: Record<string, unknown>;
 }
 
-export interface Config {
-  /** 解析得到的配置文件绝对路径 */
-  path: string;
-  datasources: Record<string, DatasourceConfig>;
-}
+export type Datasources = Record<string, DatasourceConfig>;

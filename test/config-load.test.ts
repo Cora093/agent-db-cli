@@ -34,26 +34,31 @@ datasources:
 describe('parseConfig (§5 配置解析与校验)', () => {
   it('解析合法配置并把 map key 注入为 id', () => {
     const cfg = parseConfig(VALID, PATH);
-    expect(cfg.path).toBe(PATH);
-    expect(Object.keys(cfg.datasources)).toEqual([
+    expect(Object.keys(cfg)).toEqual([
       'prod-mysql-ro',
       'analytics-pg-ro',
       'dm-core-ro',
     ]);
-    expect(cfg.datasources['prod-mysql-ro'].id).toBe('prod-mysql-ro');
-    expect(cfg.datasources['prod-mysql-ro'].driver).toBe('mysql');
-    expect(cfg.datasources['analytics-pg-ro'].schema).toBe('sales');
-    expect(cfg.datasources['analytics-pg-ro'].password).toBe('env:PG_PWD');
+    expect(cfg['prod-mysql-ro'].id).toBe('prod-mysql-ro');
+    expect(cfg['prod-mysql-ro'].driver).toBe('mysql');
+    expect(cfg['analytics-pg-ro'].schema).toBe('sales');
+    expect(cfg['analytics-pg-ro'].password).toBe('env:PG_PWD');
   });
 
   it('DM 数据源可省略 database', () => {
     const cfg = parseConfig(VALID, PATH);
-    expect(cfg.datasources['dm-core-ro'].database).toBeUndefined();
-    expect(cfg.datasources['dm-core-ro'].schema).toBe('FINANCE');
+    expect(cfg['dm-core-ro'].database).toBeUndefined();
+    expect(cfg['dm-core-ro'].schema).toBe('FINANCE');
   });
 
-  it('YAML 语法错 → CONFIG', () => {
-    expect(() => parseConfig('datasources: : :\n  - [', PATH)).toThrow(AppError);
+  it('YAML 语法错 → CONFIG, hint 保留配置路径', () => {
+    try {
+      parseConfig('datasources: : :\n  - [', PATH);
+      throw new Error('应当抛错');
+    } catch (e) {
+      expect(e).toBeInstanceOf(AppError);
+      expect((e as AppError).hint).toContain(PATH);
+    }
   });
 
   it('YAML 语法错的报错不回显源码行(密码不泄漏)', () => {
@@ -79,6 +84,17 @@ datasources:
     }
   });
 
+  it('非对象顶层 → CONFIG, hint 保留配置路径', () => {
+    try {
+      parseConfig('[]', PATH);
+      throw new Error('应当抛错');
+    } catch (e) {
+      expect((e as AppError).category).toBe('CONFIG');
+      expect((e as AppError).message).toContain('顶层');
+      expect((e as AppError).hint).toContain(PATH);
+    }
+  });
+
   it('缺 datasources 顶层键 → CONFIG', () => {
     try {
       parseConfig('other: 1', PATH);
@@ -86,6 +102,7 @@ datasources:
     } catch (e) {
       expect((e as AppError).category).toBe('CONFIG');
       expect((e as AppError).message).toContain('datasources');
+      expect((e as AppError).hint).toContain(PATH);
     }
   });
 
@@ -114,7 +131,7 @@ datasources:
     const entries = ['mysql', 'doris', 'starrocks', 'tidb', 'oceanbase', 'postgres', 'dm']
       .map((driver) => `  ${driver}:\n    driver: ${driver}\n    host: h\n    user: u`)
       .join('\n');
-    expect(Object.keys(parseConfig(`datasources:\n${entries}`, PATH).datasources)).toHaveLength(7);
+    expect(Object.keys(parseConfig(`datasources:\n${entries}`, PATH))).toHaveLength(7);
   });
 
   it('driver 不在 descriptor registry → CONFIG 列出合法值', () => {
@@ -167,7 +184,13 @@ datasources:
     expect(() => parseConfig(bad, PATH)).toThrow(/port/);
   });
 
-  it('空 datasources(无数据源)→ CONFIG', () => {
-    expect(() => parseConfig('datasources: {}', PATH)).toThrow(AppError);
+  it('空 datasources(无数据源)→ CONFIG, hint 保留配置路径', () => {
+    try {
+      parseConfig('datasources: {}', PATH);
+      throw new Error('应当抛错');
+    } catch (e) {
+      expect(e).toBeInstanceOf(AppError);
+      expect((e as AppError).hint).toContain(PATH);
+    }
   });
 });

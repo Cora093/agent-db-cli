@@ -1,10 +1,10 @@
-import type { Config } from '../config/types.js';
+import type { Datasources } from '../config/types.js';
 import type { OutputFormat } from '../types.js';
 import { renderView, type View } from './common.js';
 
 /** list:列所有数据源(§8)。无需连接 DB。 */
-export function listCommand(config: Config, format: OutputFormat): string {
-  const dss = Object.values(config.datasources);
+export function listCommand(datasources: Datasources, format: OutputFormat): string {
+  const dss = Object.values(datasources);
   const view: View = {
     command: 'list',
     json: {

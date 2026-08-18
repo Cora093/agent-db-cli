@@ -6,7 +6,7 @@ import { schemaCommand } from '../src/commands/schema.js';
 import { emitResult, renderError } from '../src/output/emit.js';
 import { getCapabilities } from '../src/capabilities.js';
 import { AppError } from '../src/errors.js';
-import type { Config, DatasourceConfig } from '../src/config/types.js';
+import type { DatasourceConfig, Datasources } from '../src/config/types.js';
 
 const connect = vi.fn(async () => ({ driver: 'mysql' as const, close: vi.fn(async () => undefined) }));
 const listTables = vi.fn(async () => [{ schema: 'app', name: 'orders', type: 'BASE TABLE' }]);
@@ -44,7 +44,7 @@ const ds: DatasourceConfig = {
   user: 'readonly',
   password: 'secret',
 };
-const config: Config = { path: '/config.yaml', datasources: { test: ds } };
+const config: Datasources = { test: ds };
 
 function expectVersioned(value: string | object): void {
   const output = typeof value === 'string' ? JSON.parse(value) : value;

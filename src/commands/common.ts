@@ -1,4 +1,4 @@
-import type { Config, DatasourceConfig } from '../config/types.js';
+import type { DatasourceConfig, Datasources } from '../config/types.js';
 import type { OutputFormat, SqlValue } from '../types.js';
 import { AppError } from '../errors.js';
 import { formatCsv, formatTable } from '../output/format.js';
@@ -53,10 +53,10 @@ function flattenSections(view: View): { columns: string[]; rows: SqlValue[][] } 
 }
 
 /** 选数据源(§8):未命中报错并列出所有合法 id,便于 Agent 自纠。 */
-export function pickDatasource(config: Config, id: string): DatasourceConfig {
-  const ds = config.datasources[id];
+export function pickDatasource(datasources: Datasources, id: string): DatasourceConfig {
+  const ds = datasources[id];
   if (!ds) {
-    const ids = Object.keys(config.datasources);
+    const ids = Object.keys(datasources);
     throw new AppError('DATASOURCE_NOT_FOUND', `未知 --ds '${id}'`, {
       hint: `可用: ${ids.join(', ')}`,
     });

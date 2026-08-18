@@ -1,20 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { listCommand } from '../src/commands/list.js';
-import type { Config } from '../src/config/types.js';
+import type { Datasources } from '../src/config/types.js';
 
-const config: Config = {
-  path: '/cfg.yaml',
-  datasources: {
-    'prod-mysql-ro': {
-      id: 'prod-mysql-ro',
-      label: '订单生产库',
-      driver: 'mysql',
-      host: 'h1',
-      database: 'orders',
-      user: 'u',
-    },
-    'dm-core-ro': { id: 'dm-core-ro', driver: 'dm', host: 'h2', user: 'u2' },
+const config: Datasources = {
+  'prod-mysql-ro': {
+    id: 'prod-mysql-ro',
+    label: '订单生产库',
+    driver: 'mysql',
+    host: 'h1',
+    database: 'orders',
+    user: 'u',
   },
+  'dm-core-ro': { id: 'dm-core-ro', driver: 'dm', host: 'h2', user: 'u2' },
 };
 
 describe('listCommand (§8)', () => {

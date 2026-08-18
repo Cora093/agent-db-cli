@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { AppError } from '../errors.js';
 import { DRIVER_NAMES, isDriverName } from '../dialects/descriptors.js';
-import type { Config, DatasourceConfig } from './types.js';
+import type { DatasourceConfig, Datasources } from './types.js';
 import { resolveConfigPath } from './paths.js';
 import { checkConfigPermissions } from './permissions.js';
 
@@ -10,7 +10,7 @@ import { checkConfigPermissions } from './permissions.js';
  * 解析 + 校验配置文本(纯函数,不碰 IO)。
  * map key 注入为各数据源的 id。
  */
-export function parseConfig(text: string, path: string): Config {
+export function parseConfig(text: string, path: string): Datasources {
   let doc: unknown;
   try {
     doc = parseYaml(text);
@@ -33,7 +33,7 @@ export function parseConfig(text: string, path: string): Config {
   const ds = (doc as Record<string, unknown>).datasources;
   if (!isPlainObject(ds)) {
     throw new AppError('CONFIG', "配置缺少 'datasources' 对象", {
-      hint: '顶层需有 datasources: 映射,见示例 datasources.yaml',
+      hint: `检查 ${path}: 顶层需有 datasources: 映射,见示例 datasources.yaml`,
     });
   }
 
@@ -44,12 +44,12 @@ export function parseConfig(text: string, path: string): Config {
     });
   }
 
-  const datasources: Record<string, DatasourceConfig> = {};
+  const datasources: Datasources = {};
   for (const id of ids) {
     datasources[id] = validateDatasource(id, (ds as Record<string, unknown>)[id]);
   }
 
-  return { path, datasources };
+  return datasources;
 }
 
 function validateDatasource(id: string, raw: unknown): DatasourceConfig {
@@ -143,7 +143,7 @@ export function loadConfig(
     platform?: NodeJS.Platform;
     configPath?: string;
   } = {},
-): Config {
+): Datasources {
   const path = opts.configPath ?? resolveConfigPath({ env: opts.env, platform: opts.platform });
 
   if (!fs.existsSync(path)) {

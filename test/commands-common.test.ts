@@ -6,15 +6,12 @@ import {
   resolveSqlInput,
   resolveQueryLimits,
 } from '../src/commands/common.js';
-import type { Config } from '../src/config/types.js';
+import type { Datasources } from '../src/config/types.js';
 import { AppError } from '../src/errors.js';
 
-const config: Config = {
-  path: '/cfg.yaml',
-  datasources: {
-    'prod-mysql-ro': { id: 'prod-mysql-ro', driver: 'mysql', host: 'h', user: 'u' },
-    'bi-doris-ro': { id: 'bi-doris-ro', driver: 'doris', host: 'h2', user: 'u2' },
-  },
+const config: Datasources = {
+  'prod-mysql-ro': { id: 'prod-mysql-ro', driver: 'mysql', host: 'h', user: 'u' },
+  'bi-doris-ro': { id: 'bi-doris-ro', driver: 'doris', host: 'h2', user: 'u2' },
 };
 
 describe('pickDatasource (§8 --ds 显式)', () => {

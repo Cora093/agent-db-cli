@@ -219,6 +219,13 @@ datasources:
 
 ## 仓库约定
 
+### Commit message
+
+- 默认格式为 `<type>(<scope>):<中文描述>`，冒号后不加空格。
+- `type` 和 `scope` 使用英文小写；描述使用简体中文并直接说明变更。
+- 关联 Issue 时在描述末尾追加 `(#<number>)`。
+- 示例：`feat(order):增加订单相关功能`、`fix(login):修复登录问题`、`docs(api):补充接口文档`。
+
 - `skills/` 是配套 Agent skill 的版本化副本。改 CLI 行为时同步检查 skill 示例。
 - 稳定用户说明放 README；维护细节放本文件。
 - GitHub Actions 只跑本地单元验证：`pnpm install --frozen-lockfile`、`pnpm run typecheck`、`pnpm test`。

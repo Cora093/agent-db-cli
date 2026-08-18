@@ -1,5 +1,5 @@
 import type { Datasources } from '../config/types.js';
-import type { OutputFormat } from '../types.js';
+import type { OutputFormat } from '../output/plan.js';
 import { renderView, type View } from './common.js';
 
 /** list:列所有数据源(§8)。无需连接 DB。 */

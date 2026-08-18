@@ -68,9 +68,7 @@ describe('all JSON envelopes carry the centralized contract version', () => {
       ds: 'test',
       result: { columns: ['id'], rows: [[1]], truncated: false, ms: 1 },
       format: 'json',
-      noSpill: false,
     }, {
-      writeSpill: () => '/tmp/result.ndjson',
       writeOut: () => ({ bytes: 0 }),
     }));
   });

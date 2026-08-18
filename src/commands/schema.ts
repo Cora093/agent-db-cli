@@ -1,5 +1,6 @@
 import type { DatasourceConfig } from '../config/types.js';
-import type { OutputFormat, SqlValue } from '../types.js';
+import type { SqlValue } from '../types.js';
+import type { OutputFormat } from '../output/plan.js';
 import { getDialect } from '../dialects/registry.js';
 import { resolveDatasource } from '../config/resolve.js';
 import { renderView, parseTableArg, type View, type ViewSection } from './common.js';

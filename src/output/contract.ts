@@ -14,7 +14,7 @@ export interface QueryMeta {
   ms: number;
   /** True only when the database/query limit omitted rows. */
   queryTruncated: boolean;
-  /** Rows omitted only from this delivery (for example --no-spill preview capping). */
+  /** Rows omitted from this delivery, such as rows available only in a spill artifact. */
   deliveryOmittedRows: number;
   mode: DeliveryMode;
   spillPath: string | null;

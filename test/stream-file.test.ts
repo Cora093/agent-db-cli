@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createRowFileWriter, createSpillWriter } from '../src/output/stream-file.js';
+import {
+  MAX_NDJSON_KEYS_BYTES,
+  MAX_SPILL_FILE_BYTES,
+  createRowFileWriter,
+  createSpillWriter,
+} from '../src/output/stream-file.js';
+import { MAX_FIELD_BYTES, MAX_RESULT_BYTES } from '../src/dialects/sql-util.js';
+import { MAX_LIMIT } from '../src/commands/common.js';
 
 const files: string[] = [];
 afterEach(() => { for (const f of files.splice(0)) fs.rmSync(f, { force: true }); });
@@ -12,9 +19,10 @@ const meta = { rowCount: 1, ms: 7, truncated: false, resultBytes: 3 };
 describe('transactional incremental output writer', () => {
   it('writes versioned NDJSON rows and truthful trailer', () => {
     const file = temp('.ndjson');
-    const w = createRowFileWriter(file, 'ndjson', 'd', { direct: true });
+    const w = createRowFileWriter(file, 'ndjson', 'd');
     expect(w.write([1, 2], ['x', 'x'])).toBe(true);
     w.finish(meta);
+    w.commit();
     const records = fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     expect(records[0]).toEqual({
       contractVersion: '1.0',
@@ -36,6 +44,35 @@ describe('transactional incremental output writer', () => {
       meta: { rowCount: 1, ms: 7, queryTruncated: false, outPath: file, resultBytes: 3 },
     });
     expect(records[2].meta.bytes).toBe(fs.statSync(file).size);
+  });
+
+  it('derives a finite spill artifact bound from the shared query budgets', () => {
+    expect(MAX_NDJSON_KEYS_BYTES).toBe(MAX_FIELD_BYTES);
+    expect(MAX_SPILL_FILE_BYTES).toBe(
+      MAX_RESULT_BYTES + MAX_LIMIT * MAX_FIELD_BYTES + MAX_FIELD_BYTES * 2 + 4096,
+    );
+    expect(Number.isSafeInteger(MAX_SPILL_FILE_BYTES)).toBe(true);
+  });
+
+  it('rejects oversized NDJSON key framing without publishing', () => {
+    const file = temp('.ndjson');
+    const w = createRowFileWriter(file, 'ndjson', 'd', { delivery: 'spill' });
+    expect(() => w.write([1], ['x'.repeat(MAX_NDJSON_KEYS_BYTES + 1)]))
+      .toThrow('NDJSON 列名超过 artifact framing 预算');
+    expect(fs.existsSync(file)).toBe(false);
+    w.abort();
+    expect(fs.existsSync(w.tempPath)).toBe(false);
+  });
+
+  it('rejects framing beyond the artifact bound without publishing', () => {
+    const file = temp('.ndjson');
+    const w = createRowFileWriter(file, 'ndjson', 'd', { delivery: 'spill', maxBytes: 1400 });
+    expect(w.write(['x'.repeat(400)], ['value'])).toBe(true);
+    expect(w.write(['y'.repeat(400)], ['value'])).toBe(false);
+    w.finish({ ...meta, resultBytes: 402 }, ['value']);
+    expect(fs.existsSync(file)).toBe(false);
+    w.abort();
+    expect(fs.existsSync(w.tempPath)).toBe(false);
   });
 
   it('publishes spill files only after completion and commit', () => {
@@ -83,8 +120,9 @@ describe('transactional incremental output writer', () => {
 
   it.each(['json', 'ndjson', 'csv'] as const)('preserves columns for empty %s results', (format) => {
     const file = temp('.' + format);
-    const w = createRowFileWriter(file, format, 'd', { direct: true });
+    const w = createRowFileWriter(file, format, 'd');
     w.finish({ ...meta, rowCount: 0, resultBytes: 0 }, ['id', 'name']);
+    w.commit();
     const content = fs.readFileSync(file, 'utf8');
     if (format === 'json') {
       expect(JSON.parse(content)).toMatchObject({ columns: ['id', 'name'], rows: [] });
@@ -99,10 +137,10 @@ describe('transactional incremental output writer', () => {
 
   it('serialized byte cap rejects a complete row before any partial write', () => {
     const file = temp('.csv');
-    const w = createRowFileWriter(file, 'csv', 'd', { direct: true, maxBytes: 20 });
-    expect(fs.readFileSync(file, 'utf8')).toBe('');
+    const w = createRowFileWriter(file, 'csv', 'd', { maxBytes: 20 });
+    expect(fs.readFileSync(w.tempPath, 'utf8')).toBe('');
     expect(w.write(['12345678901234567890'], ['v'])).toBe(false);
-    expect(fs.readFileSync(file, 'utf8')).toBe('v\r\n');
+    expect(fs.readFileSync(w.tempPath, 'utf8')).toBe('v\r\n');
     expect(() => w.finish({
       ...meta,
       rowCount: 0,
@@ -114,9 +152,10 @@ describe('transactional incremental output writer', () => {
 
   it('CSV uses shared RFC-4180 serializer', () => {
     const file = temp('.csv');
-    const w = createRowFileWriter(file, 'csv', 'd', { direct: true });
+    const w = createRowFileWriter(file, 'csv', 'd');
     w.write(['a,b', 'x"y', null], ['one', 'two', 'three']);
     w.finish(meta);
+    w.commit();
     expect(fs.readFileSync(file, 'utf8')).toBe('one,two,three\r\n"a,b","x""y",\r\n');
   });
 });

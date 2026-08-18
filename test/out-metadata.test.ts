@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emitResult } from '../src/output/emit.js';
+import { resolveOutPlan } from '../src/output/plan.js';
 
 describe('persisted output metadata', () => {
   it('.json embeds truthful path and stdout reports exact serialized bytes', () => {
@@ -8,9 +9,8 @@ describe('persisted output metadata', () => {
       ds: 'd',
       result: { columns: ['id'], rows: [[1]], truncated: true, ms: 5 },
       format: 'json',
-      noSpill: false,
-      outPath: '/out/data.json',
-    }, { writeSpill: vi.fn(), writeOut }));
+      outPlan: resolveOutPlan('/out/data.json', 'json'),
+    }, { writeOut }));
     const content = writeOut.mock.calls[0][1];
     const persisted = JSON.parse(content);
     expect(persisted.meta).toEqual({

@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import { emitResult, inferOutFormat } from '../src/output/emit.js';
+import { describe, expect, it, vi } from 'vitest';
+import { emitResult } from '../src/output/emit.js';
+import { resolveOutPlan } from '../src/output/plan.js';
 import type { QueryResult } from '../src/dialects/types.js';
 
 function result(rows: number, opts: Partial<QueryResult> = {}): QueryResult {
@@ -12,202 +13,102 @@ function result(rows: number, opts: Partial<QueryResult> = {}): QueryResult {
   };
 }
 
-const noWrites = {
-  writeSpill: vi.fn(() => '/tmp/agent-db-cli/x.ndjson'),
-  writeOut: vi.fn(() => ({ bytes: 0 })),
-};
-
-describe('inferOutFormat (§9b 按扩展名推断)', () => {
-  it('.csv/.ndjson/.json 各自对应', () => {
-    expect(inferOutFormat('a.csv', 'json')).toBe('csv');
-    expect(inferOutFormat('a.ndjson', 'json')).toBe('ndjson');
-    expect(inferOutFormat('a.json', 'csv')).toBe('json');
-  });
-  it('认不出回退 --format', () => {
-    expect(inferOutFormat('a.dat', 'csv')).toBe('csv');
-    expect(inferOutFormat('a.dat', 'json')).toBe('json');
-  });
-});
-
-describe('emitResult — JSON 默认(agent-first)', () => {
-  it('小结果内联,spillPath=null,不写盘', () => {
-    const deps = { writeSpill: vi.fn(() => 'X'), writeOut: vi.fn(() => ({ bytes: 0 })) };
-    const out = emitResult({ ds: 'd', result: result(3), format: 'json', noSpill: false }, deps);
-    const obj = JSON.parse(out);
-    expect(obj.rows).toHaveLength(3);
-    expect(obj.meta.spillPath).toBeNull();
-    expect(deps.writeSpill).not.toHaveBeenCalled();
+describe('emitResult default JSON delivery', () => {
+  it('inlines a small columnar result without file dependencies', () => {
+    const out = JSON.parse(emitResult({ ds: 'd', result: result(3), format: 'json' }));
+    expect(out.rows).toHaveLength(3);
+    expect(out.meta).toMatchObject({ spillPath: null, mode: 'inline', rowCount: 3 });
   });
 
-  it('大结果(>50 行)落盘 + preview 50 + spillPath', () => {
-    const deps = {
-      writeSpill: vi.fn(() => '/tmp/agent-db-cli/big.ndjson'),
-      writeOut: vi.fn(() => ({ bytes: 0 })),
-    };
-    const out = emitResult({ ds: 'd', result: result(120), format: 'json', noSpill: false }, deps);
-    const obj = JSON.parse(out);
-    expect(deps.writeSpill).toHaveBeenCalledOnce();
-    expect(obj.preview).toHaveLength(50);
-    expect(obj.rows).toBeUndefined();
-    expect(obj.meta.spillPath).toBe('/tmp/agent-db-cli/big.ndjson');
-    expect(obj.meta.rowCount).toBe(120);
+  it('renders a streamed large result as a 50-row preview with a recoverable artifact', () => {
+    const out = JSON.parse(emitResult({
+      ds: 'd',
+      result: result(50, { rowCount: 120, resultBytes: 200_000 }),
+      format: 'json',
+      streamFile: { path: '/tmp/agent-db-cli/big.ndjson', bytes: 12_345 },
+    }));
+    expect(out.preview).toHaveLength(50);
+    expect(out.rows).toBeUndefined();
+    expect(out.meta).toMatchObject({
+      spillPath: '/tmp/agent-db-cli/big.ndjson',
+      bytes: 12_345,
+      rowCount: 120,
+      deliveredRowCount: 50,
+    });
   });
 
-  it('字节预算截断原因与保留字节数进入 metadata', () => {
-    const out = emitResult(
-      {
-        ds: 'd',
-        result: result(1, {
-          truncated: true,
-          truncationReason: 'result-bytes',
-          resultBytes: 42,
-        }),
-        format: 'json',
-        noSpill: false,
-      },
-      noWrites,
-    );
-    expect(JSON.parse(out).meta).toMatchObject({
+  it('rejects a large JSON result without its streamed artifact', () => {
+    expect(() => emitResult({ ds: 'd', result: result(51), format: 'json' }))
+      .toThrow('requires a streamed spill artifact');
+  });
+
+  it('preserves collection truncation metadata', () => {
+    const out = JSON.parse(emitResult({
+      ds: 'd',
+      result: result(1, { truncated: true, truncationReason: 'result-bytes', resultBytes: 42 }),
+      format: 'json',
+    }));
+    expect(out.meta).toMatchObject({
       queryTruncated: true,
       truncationReason: 'result-bytes',
       resultBytes: 42,
     });
   });
+});
 
-  it('--no-spill 大结果内联截断到 50 + truncated,不写盘', () => {
-    const deps = { writeSpill: vi.fn(() => 'X'), writeOut: vi.fn(() => ({ bytes: 0 })) };
-    const out = emitResult({ ds: 'd', result: result(120), format: 'json', noSpill: true }, deps);
-    const obj = JSON.parse(out);
-    expect(deps.writeSpill).not.toHaveBeenCalled();
-    expect(obj.rows).toHaveLength(50);
-    expect(obj.meta.queryTruncated).toBe(false);
-    expect(obj.meta.deliveryOmittedRows).toBe(70);
-    expect(obj.meta.rowCount).toBe(120);
-    expect(obj.meta.deliveredRowCount).toBe(50);
-    expect(obj.meta.spillPath).toBeNull();
+describe('emitResult explicit stdout formats', () => {
+  it('renders aligned table output', () => {
+    expect(emitResult({ ds: 'd', result: result(60), format: 'table' }))
+      .toContain('-- 60 rows, 7ms');
+  });
+
+  it('renders all CSV rows', () => {
+    expect(emitResult({ ds: 'd', result: result(3), format: 'csv' }).split('\r\n'))
+      .toEqual(['n', '0', '1', '2']);
   });
 });
 
-describe('emitResult — 显式 table/csv(给人/Excel)', () => {
-  it('table 直出对齐表,不落盘', () => {
-    const out = emitResult(
-      { ds: 'd', result: result(60), format: 'table', noSpill: false },
-      noWrites,
-    );
-    expect(out).toContain('-- 60 rows, 7ms');
-    expect(noWrites.writeSpill).not.toHaveBeenCalled();
+describe('emitResult planned file output', () => {
+  it('uses the resolved plan and reports the streamed bytes', () => {
+    const plan = resolveOutPlan('/o/data.csv', 'json');
+    const writeOut = vi.fn();
+    const out = JSON.parse(emitResult({
+      ds: 'd', result: result(10), format: 'json', outPlan: plan,
+      streamFile: { path: plan.path, bytes: 1234 },
+    }, { writeOut }));
+    expect(writeOut).not.toHaveBeenCalled();
+    expect(out.meta).toMatchObject({ outPath: '/o/data.csv', bytes: 1234, rowCount: 10 });
   });
 
-  it('csv 直出全部行', () => {
-    const out = emitResult(
-      { ds: 'd', result: result(3), format: 'csv', noSpill: false },
-      noWrites,
-    );
-    expect(out.split('\r\n')).toEqual(['n', '0', '1', '2']);
-  });
-});
-
-describe('emitResult — --out 写文件', () => {
-  it('按扩展名 csv 写盘,stdout 给摘要含 outPath', () => {
-    const deps = {
-      writeSpill: vi.fn(() => 'X'),
-      writeOut: vi.fn(() => ({ bytes: 1234 })),
-    };
-    const out = emitResult(
-      { ds: 'd', result: result(10), format: 'json', noSpill: false, outPath: '/o/data.csv' },
-      deps,
-    );
-    expect(deps.writeOut).toHaveBeenCalledOnce();
-    const [p, content] = deps.writeOut.mock.calls[0];
-    expect(p).toBe('/o/data.csv');
-    expect(content.startsWith('n\r\n')).toBe(true);
-    const obj = JSON.parse(out);
-    expect(obj.meta.outPath).toBe('/o/data.csv');
-    expect(obj.meta.bytes).toBe(1234);
-    expect(obj.meta.rowCount).toBe(10);
-  });
-
-  it('table 导出透传真实 meta:截断如实标 (truncated),不谎报完整(M2)', () => {
-    const deps = {
-      writeSpill: vi.fn(() => 'X'),
-      writeOut: vi.fn(() => ({ bytes: 1 })),
-      warn: vi.fn(),
-    };
-    emitResult(
-      {
-        ds: 'd',
-        result: result(10, { truncated: true, ms: 42 }),
-        format: 'table',
-        noSpill: false,
-        outPath: '/o/data.txt',
-      },
-      deps,
-    );
-    const [, content] = deps.writeOut.mock.calls[0];
+  it('keeps table output bounded and atomically delegated through writeOut', () => {
+    const writeOut = vi.fn(() => ({ bytes: 100 }));
+    emitResult({
+      ds: 'd',
+      result: result(10, { truncated: true, ms: 42 }),
+      format: 'table',
+      outPlan: resolveOutPlan('/o/data.txt', 'table'),
+    }, { writeOut });
+    const [, content] = writeOut.mock.calls[0];
     expect(content).toContain('-- 10 rows, 42ms (truncated)');
   });
 
-  it('json 导出带 meta { rowCount, truncated }(M2)', () => {
-    const deps = {
-      writeSpill: vi.fn(() => 'X'),
-      writeOut: vi.fn(() => ({ bytes: 1 })),
-    };
-    emitResult(
-      {
-        ds: 'd',
-        result: result(3, { truncated: true }),
-        format: 'json',
-        noSpill: false,
-        outPath: '/o/data.json',
-      },
-      deps,
-    );
-    const [, content] = deps.writeOut.mock.calls[0];
-    const obj = JSON.parse(content);
-    expect(obj.contractVersion).toBe('1.0');
-    expect(obj.meta).toEqual({
-      rowCount: 3,
-      deliveredRowCount: 3,
-      ms: 7,
-      queryTruncated: true,
-      deliveryOmittedRows: 0,
-      mode: 'out',
-      spillPath: null,
-      outPath: '/o/data.json',
-      bytes: null,
-      truncationReason: null,
-      resultBytes: null,
-    });
-    expect(obj.rows).toHaveLength(3);
+  it('warns once for an unknown extension with the fallback format', () => {
+    const warn = vi.fn();
+    emitResult({
+      ds: 'd', result: result(2), format: 'json',
+      outPlan: resolveOutPlan('/o/data.xlsx', 'json'),
+    }, { warn, writeOut: () => ({ bytes: 1 }) });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('.xlsx'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('json'));
   });
 
-  it('未知扩展名(.xlsx)→ stderr 提示真实写入格式,不静默(M2)', () => {
+  it('does not warn for a recognized extension', () => {
     const warn = vi.fn();
-    const deps = {
-      writeSpill: vi.fn(() => 'X'),
-      writeOut: vi.fn(() => ({ bytes: 1 })),
-      warn,
-    };
-    emitResult(
-      { ds: 'd', result: result(2), format: 'json', noSpill: false, outPath: '/o/data.xlsx' },
-      deps,
-    );
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0][0]).toContain('.xlsx');
-    expect(warn.mock.calls[0][0]).toContain('json');
-  });
-
-  it('已知扩展名不提示', () => {
-    const warn = vi.fn();
-    const deps = {
-      writeSpill: vi.fn(() => 'X'),
-      writeOut: vi.fn(() => ({ bytes: 1 })),
-      warn,
-    };
-    emitResult(
-      { ds: 'd', result: result(2), format: 'json', noSpill: false, outPath: '/o/data.csv' },
-      deps,
-    );
+    emitResult({
+      ds: 'd', result: result(2), format: 'json',
+      outPlan: resolveOutPlan('/o/data.csv', 'json'),
+      streamFile: { path: '/o/data.csv', bytes: 1 },
+    }, { warn });
     expect(warn).not.toHaveBeenCalled();
   });
 });

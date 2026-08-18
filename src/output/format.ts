@@ -1,6 +1,6 @@
 import type { SqlValue } from '../types.js';
 import type { TruncationReason } from '../dialects/types.js';
-import { buildQueryMeta, rowToObject, uniqueColumnKeys, versioned, type QueryMeta } from './contract.js';
+import { buildQueryMeta, versioned, type QueryMeta } from './contract.js';
 
 export interface TableMeta {
   rowCount: number;
@@ -117,12 +117,6 @@ export function formatCsv(columns: string[], rows: SqlValue[][]): string {
 
 export function serializeCsvRow(values: readonly (SqlValue | string)[]): string {
   return values.map(csvCell).join(',');
-}
-
-/** Map positional rows to collision-safe object keys while retaining original labels separately. */
-export function rowsToObjects(columns: string[], rows: SqlValue[][]): Record<string, SqlValue>[] {
-  const keys = uniqueColumnKeys(columns);
-  return rows.map((row) => rowToObject(keys, row));
 }
 
 function csvCell(value: SqlValue | string): string {

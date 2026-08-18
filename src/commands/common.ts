@@ -1,5 +1,6 @@
 import type { DatasourceConfig, Datasources } from '../config/types.js';
-import type { OutputFormat, SqlValue } from '../types.js';
+import type { SqlValue } from '../types.js';
+import type { OutputFormat } from '../output/plan.js';
 import { AppError } from '../errors.js';
 import { formatCsv, formatTable } from '../output/format.js';
 import { buildNdjson, versioned } from '../output/contract.js';

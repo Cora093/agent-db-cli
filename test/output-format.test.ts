@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatCsv,
-  rowsToObjects,
   formatTable,
   buildInlineJson,
   buildSpillJson,
@@ -39,28 +38,6 @@ describe('formatCsv (§9 RFC-4180)', () => {
     expect(formatCsv(['a', 'b'], [])).toBe('a,b');
   });
 });
-
-describe('rowsToObjects', () => {
-  it('按列名映射成对象,保留 null', () => {
-    expect(rowsToObjects(['id', 'name'], [['1', null]])).toEqual([{ id: '1', name: null }]);
-  });
-
-  it('重复列名使用稳定后缀且不丢值', () => {
-    expect(rowsToObjects(['id', 'id', 'id'], [[1, 2, 3]])).toEqual([
-      { id: 1, 'id#2': 2, 'id#3': 3 },
-    ]);
-  });
-
-  it('原始标签含后缀时仍生成全局唯一 key', () => {
-    expect(rowsToObjects(['x', 'x', 'x#2'], [[1, 2, 3]])).toEqual([
-      { x: 1, 'x#3': 2, 'x#2': 3 },
-    ]);
-    expect(rowsToObjects(['x', 'x#2', 'x', 'x#3', 'x'], [[1, 2, 3, 4, 5]])).toEqual([
-      { x: 1, 'x#2': 2, 'x#4': 3, 'x#3': 4, 'x#5': 5 },
-    ]);
-  });
-});
-
 
 describe('formatTable (§9 给人看)', () => {
   it('对齐列 + 分隔线 + 脚注;NULL 显式打印', () => {

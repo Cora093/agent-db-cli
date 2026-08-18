@@ -1,5 +1,5 @@
 import { DEFAULT_LIMIT, DEFAULT_TIMEOUT_S, MAX_LIMIT, MAX_TIMEOUT_S } from './commands/common.js';
-import type { OutputFormat } from './types.js';
+import { OUTPUT_FORMATS } from './output/plan.js';
 import { DRIVER_NAMES, getDriverDescriptor } from './dialects/descriptors.js';
 import { versioned } from './output/contract.js';
 
@@ -14,7 +14,7 @@ export function getCapabilities(): object {
     limits: { defaultRows: DEFAULT_LIMIT, maxRows: MAX_LIMIT },
     timeouts: { defaultSeconds: DEFAULT_TIMEOUT_S, maxSeconds: MAX_TIMEOUT_S },
     output: {
-      formats: ['json', 'ndjson', 'table', 'csv'] satisfies OutputFormat[],
+      formats: OUTPUT_FORMATS,
       defaultFormat: 'json',
       stdoutDataOnly: true,
       diagnostics: 'stderr',

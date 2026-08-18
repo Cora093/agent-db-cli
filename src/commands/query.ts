@@ -1,5 +1,6 @@
 import type { DatasourceConfig } from '../config/types.js';
-import type { OutputFormat } from '../types.js';
+import type { OutputFormat } from '../output/plan.js';
+import { resolveOutPlan } from '../output/plan.js';
 import { getDialect } from '../dialects/registry.js';
 import type { Dialect } from '../dialects/types.js';
 import { resolveDatasource } from '../config/resolve.js';
@@ -18,7 +19,6 @@ export interface QueryOpts {
   limit: number;
   /** 已夹紧的服务端超时(毫秒) */
   timeoutMs: number;
-  noSpill: boolean;
   out?: string;
   /** 非致命提示通道(stderr);缺省静默 */
   warn?: (msg: string) => void;
@@ -40,19 +40,16 @@ export async function queryCommand(
     createOutWriter?: typeof createOutWriter;
   } = {},
 ): Promise<string> {
-  // ③ 守卫:在连接前拦截非只读 / 多语句 / 文件写 / 锁读(词法按 driver 方言)
   const guarded = guardSql(sql, ds.driver);
-
-  // 机会式 GC(§9b):删超龄落盘文件,非致命
   gcSpillDir();
 
+  const outPlan = opts.out ? resolveOutPlan(opts.out, format) : undefined;
   const dialect = (deps.getDialect ?? getDialect)(ds.driver);
   const conn = await dialect.connect(resolveDatasource(ds, env));
   let writer: RowFileWriter | undefined;
   try {
-    const streamOut = opts.out && inferStreamableOut(opts.out, format);
-    if (streamOut) writer = (deps.createOutWriter ?? createOutWriter)(opts.out!, format, ds.id);
-    else if (format === 'json' && !opts.noSpill) {
+    if (outPlan?.streamable) writer = (deps.createOutWriter ?? createOutWriter)(outPlan, ds.id);
+    else if (!outPlan && format === 'json') {
       writer = (deps.createSpillWriter ?? createSpillWriter)(ds.id);
     }
 
@@ -72,26 +69,23 @@ export async function queryCommand(
     }, result.columns);
 
     let streamFile = writer && file ? { path: writer.filePath, bytes: file.bytes } : undefined;
-    if (writer && !opts.out && withinInlineLimits(rowCount, result.resultBytes ?? 0) && !result.truncated) {
+    const inline = writer !== undefined && !outPlan
+      && withinInlineLimits(rowCount, result.resultBytes ?? 0);
+    if (writer && inline) {
       writer.abort();
       streamFile = undefined;
-    } else {
-      writer?.commit();
     }
 
-    return emitResult(
-      { ds: ds.id, result, format, noSpill: opts.noSpill, outPath: opts.out, streamFile },
+    const output = emitResult(
+      { ds: ds.id, result, format, outPlan, streamFile },
       { warn: opts.warn, writeOut: writeFileAtomically },
     );
+    if (!inline) writer?.commit();
+    return output;
   } catch (err) {
     writer?.abort();
     throw err;
   } finally {
     if (!conn.discarded) await conn.close();
   }
-}
-
-function inferStreamableOut(filePath: string, format: OutputFormat): boolean {
-  const ext = filePath.toLowerCase();
-  return ext.endsWith('.csv') || ext.endsWith('.ndjson') || ext.endsWith('.json') || format !== 'table';
 }

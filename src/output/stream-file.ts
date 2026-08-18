@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { OutputFormat, SqlValue } from '../types.js';
+import type { SqlValue } from '../types.js';
+import type { OutPlan, StreamFileFormat } from './plan.js';
 import type { TruncationReason } from '../dialects/types.js';
+import { MAX_FIELD_BYTES, MAX_RESULT_BYTES } from '../dialects/sql-util.js';
+import { MAX_LIMIT } from '../commands/common.js';
 import { AppError } from '../errors.js';
 import { spillDir, spillFileName } from './spill.js';
 import { serializeCsvRow } from './format.js';
@@ -14,8 +17,13 @@ import {
   versioned,
 } from './contract.js';
 
-export type StreamFileFormat = 'csv' | 'ndjson' | 'json';
-export const MAX_SERIALIZED_FILE_BYTES = 8 * 1024 * 1024;
+export const MAX_SERIALIZED_FILE_BYTES = MAX_RESULT_BYTES;
+
+// NDJSON repeats object keys in every row. Initialization caps their encoded framing at the
+// single-field budget, so this covers 500 rows plus values, header copies, and completion metadata.
+export const MAX_NDJSON_KEYS_BYTES = MAX_FIELD_BYTES;
+export const MAX_SPILL_FILE_BYTES =
+  MAX_RESULT_BYTES + MAX_LIMIT * MAX_NDJSON_KEYS_BYTES + MAX_NDJSON_KEYS_BYTES * 2 + 4096;
 
 export interface StreamCompletionMeta {
   rowCount: number;
@@ -29,7 +37,6 @@ export interface RowFileWriter {
   readonly filePath: string;
   readonly tempPath: string;
   readonly format: StreamFileFormat;
-  readonly serializedBytes: number;
   write(row: SqlValue[], columns: string[]): boolean;
   finish(meta: StreamCompletionMeta, columns?: string[]): { bytes: number };
   commit(): void;
@@ -42,7 +49,7 @@ export function createSpillWriter(ds: string): RowFileWriter {
   const filePath = path.join(dir, spillFileName(ds));
   return createRowFileWriter(filePath, 'ndjson', ds, {
     delivery: 'spill',
-    maxBytes: Number.MAX_SAFE_INTEGER,
+    maxBytes: MAX_SPILL_FILE_BYTES,
   });
 }
 
@@ -58,19 +65,9 @@ export function writeFileAtomically(filePath: string, content: string): { bytes:
   }
 }
 
-export function createOutWriter(filePath: string, fallback: OutputFormat, ds: string): RowFileWriter {
-  const format = inferFileFormat(filePath, fallback);
-  if (format === 'table') throw new Error('table output uses the bounded legacy formatter');
-  return createRowFileWriter(filePath, format, ds, { delivery: 'out' });
-}
-
-export function inferFileFormat(filePath: string, fallback: OutputFormat): StreamFileFormat | 'table' {
-  switch (path.extname(filePath).toLowerCase()) {
-    case '.csv': return 'csv';
-    case '.ndjson': return 'ndjson';
-    case '.json': return 'json';
-    default: return fallback;
-  }
+export function createOutWriter(plan: OutPlan, ds: string): RowFileWriter {
+  if (!plan.streamable) throw new Error('table output uses bounded buffering');
+  return createRowFileWriter(plan.path, plan.format as StreamFileFormat, ds, { delivery: 'out' });
 }
 
 export function createRowFileWriter(
@@ -78,14 +75,13 @@ export function createRowFileWriter(
   format: StreamFileFormat,
   ds: string,
   opts: {
-    direct?: boolean;
     delivery?: 'out' | 'spill';
     maxBytes?: number;
   } = {},
 ): RowFileWriter {
   const maxBytes = opts.maxBytes ?? MAX_SERIALIZED_FILE_BYTES;
   const delivery = opts.delivery ?? 'out';
-  const tempPath = opts.direct ? filePath : siblingTempPath(filePath);
+  const tempPath = siblingTempPath(filePath);
   const fd = fs.openSync(tempPath, 'wx');
   let bytes = 0;
   let first = true;
@@ -100,6 +96,12 @@ export function createRowFileWriter(
     if (initialized) return;
     columns = [...nextColumns];
     keys = uniqueColumnKeys(columns);
+    if (format === 'ndjson') {
+      const keyFramingBytes = Buffer.byteLength(JSON.stringify(keys), 'utf8');
+      if (keyFramingBytes > MAX_NDJSON_KEYS_BYTES) {
+        throw new Error('NDJSON 列名超过 artifact framing 预算');
+      }
+    }
     const header = format === 'ndjson'
       ? JSON.stringify(versioned({
           type: 'header' as const,
@@ -123,7 +125,6 @@ export function createRowFileWriter(
     filePath,
     tempPath,
     format,
-    get serializedBytes() { return bytes; },
     write(row, nextColumns) {
       if (closed) return false;
       initialize(nextColumns);
@@ -175,7 +176,7 @@ function completionText(
   delivery: 'out' | 'spill',
 ): string {
   if (format === 'csv') return '';
-  let serializedBytes = currentBytes;
+  let finalBytes = currentBytes;
   let text = '';
   for (let i = 0; i < 4; i++) {
     const queryMeta = buildQueryMeta({
@@ -185,14 +186,14 @@ function completionText(
       queryTruncated: meta.truncated,
       mode: 'out',
       ...(delivery === 'spill' ? { spillPath: filePath } : { outPath: filePath }),
-      bytes: serializedBytes,
+      bytes: finalBytes,
       truncationReason: meta.truncationReason,
       resultBytes: meta.resultBytes,
     });
     text = format === 'ndjson'
       ? JSON.stringify(versioned({ type: 'trailer' as const, meta: queryMeta })) + '\n'
       : '],"meta":' + JSON.stringify(queryMeta) + '}';
-    serializedBytes = currentBytes + Buffer.byteLength(text, 'utf8');
+    finalBytes = currentBytes + Buffer.byteLength(text, 'utf8');
   }
   return text;
 }

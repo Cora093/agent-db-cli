@@ -23,13 +23,12 @@ function dialect(run: (opts: RunOptions) => Promise<QueryResult>): Dialect {
 }
 
 describe('queryCommand streamed output orchestration', () => {
-  it('small default JSON removes provisional spill and emits inline', async () => {
+  it('small default JSON removes the provisional spill and emits inline', async () => {
     const spill = temp('.ndjson');
-    const writer = createRowFileWriter(spill, 'ndjson', 'd', { direct: true });
+    const writer = createRowFileWriter(spill, 'ndjson', 'd');
+    files.push(writer.tempPath);
     const abort = vi.spyOn(writer, 'abort');
-    const out = await queryCommand(ds, 'SELECT 1', {
-      limit: 500, timeoutMs: 1000, noSpill: false,
-    }, 'json', {}, {
+    const out = await queryCommand(ds, 'SELECT 1', { limit: 500, timeoutMs: 1000 }, 'json', {}, {
       getDialect: () => dialect(async (opts) => {
         opts.onRow?.([1], ['n']);
         return { columns: ['n'], rows: [[1]], rowCount: 1, resultBytes: 3, truncated: false, ms: 2 };
@@ -39,43 +38,74 @@ describe('queryCommand streamed output orchestration', () => {
     expect(JSON.parse(out)).toMatchObject({ rows: [[1]], meta: { spillPath: null, rowCount: 1 } });
     expect(abort).toHaveBeenCalledOnce();
     expect(fs.existsSync(spill)).toBe(false);
+    expect(fs.existsSync(writer.tempPath)).toBe(false);
   });
 
-  it('successful truncation skips close on a discarded connection', async () => {
+  it('large default JSON publishes complete framed NDJSON while retaining only its preview', async () => {
+    const spill = temp('.ndjson');
+    const writer = createRowFileWriter(spill, 'ndjson', 'd', { delivery: 'spill' });
+    files.push(writer.tempPath);
+    const out = await queryCommand(ds, 'SELECT n', { limit: 500, timeoutMs: 1000 }, 'json', {}, {
+      getDialect: () => dialect(async (opts) => {
+        for (let i = 0; i < 60; i++) expect(opts.onRow?.([i], ['n'])).toBe(true);
+        return {
+          columns: ['n'], rows: Array.from({ length: 50 }, (_, i) => [i]), rowCount: 60,
+          resultBytes: 200_000, truncated: false, ms: 3,
+        };
+      }),
+      createSpillWriter: () => writer,
+    });
+    const summary = JSON.parse(out);
+    expect(summary.preview).toHaveLength(50);
+    expect(summary.meta.spillPath).toBe(spill);
+    const records = fs.readFileSync(spill, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records).toHaveLength(62);
+    expect(records[0]).toMatchObject({ type: 'header', columns: ['n'] });
+    expect(records[60]).toMatchObject({ type: 'row', row: { n: 59 } });
+    expect(records[61]).toMatchObject({ type: 'trailer', meta: { rowCount: 60, spillPath: spill } });
+  });
+
+  it('small truncated JSON stays inline, retains truncation metadata, and removes its temp file', async () => {
     const close = vi.fn(async () => { throw new Error('must not close discarded connection'); });
     const discardedDialect = dialect(async () => ({
       columns: ['n'], rows: [[1]], rowCount: 1, resultBytes: 3,
       truncated: true, truncationReason: 'row-limit', ms: 2,
     }));
     discardedDialect.connect = async () => ({ discarded: true, close });
-    const out = await queryCommand(ds, 'SELECT 1', {
-      limit: 1, timeoutMs: 1000, noSpill: true,
-    }, 'json', {}, { getDialect: () => discardedDialect });
-    expect(JSON.parse(out).meta.queryTruncated).toBe(true);
+    const spill = temp('.ndjson');
+    const writer = createRowFileWriter(spill, 'ndjson', 'd', { delivery: 'spill' });
+    files.push(writer.tempPath);
+    const out = await queryCommand(ds, 'SELECT 1', { limit: 1, timeoutMs: 1000 }, 'json', {}, {
+      getDialect: () => discardedDialect,
+      createSpillWriter: () => writer,
+    });
+    expect(JSON.parse(out)).toMatchObject({
+      rows: [[1]],
+      meta: { queryTruncated: true, truncationReason: 'row-limit', spillPath: null },
+    });
+    expect(fs.existsSync(spill)).toBe(false);
+    expect(fs.existsSync(writer.tempPath)).toBe(false);
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('table --out preserves legacy formatter through atomic buffered write', async () => {
+  it('table output preserves bounded formatting through atomic buffered write', async () => {
     const outPath = temp('.txt');
     fs.writeFileSync(outPath, 'existing', 'utf8');
-    await queryCommand(ds, 'SELECT 1', {
-      limit: 500, timeoutMs: 1000, noSpill: false, out: outPath,
-    }, 'table', {}, {
+    await queryCommand(ds, 'SELECT 1', { limit: 500, timeoutMs: 1000, out: outPath }, 'table', {}, {
       getDialect: () => dialect(async () => ({
         columns: ['n'], rows: [[1]], resultBytes: 3, truncated: false, ms: 2,
       })),
     });
-    const content = fs.readFileSync(outPath, 'utf8');
-    expect(content).toBe(
+    expect(fs.readFileSync(outPath, 'utf8')).toBe(
       formatTable(['n'], [[1]], { rowCount: 1, ms: 2, truncated: false }),
     );
   });
 
-  it('byte-truncated CSV --out fails and preserves the destination', async () => {
+  it('byte-truncated CSV output fails and preserves the destination', async () => {
     const outPath = temp('.csv');
     fs.writeFileSync(outPath, 'existing', 'utf8');
     await expect(queryCommand(ds, 'SELECT 1', {
-      limit: 500, timeoutMs: 1000, noSpill: false, out: outPath,
+      limit: 500, timeoutMs: 1000, out: outPath,
     }, 'csv', {}, {
       getDialect: () => dialect(async (opts) => {
         expect(opts.onRow?.(['12345678901234567890'], ['v'])).toBe(false);
@@ -84,21 +114,34 @@ describe('queryCommand streamed output orchestration', () => {
           truncated: true, truncationReason: 'result-bytes', ms: 2,
         };
       }),
-      createOutWriter: (file, fallback, id) => createRowFileWriter(
-        file,
-        fallback === 'csv' ? 'csv' : 'json',
-        id,
-        { maxBytes: 20, delivery: 'out' },
+      createOutWriter: (plan, id) => createRowFileWriter(
+        plan.path, 'csv', id, { maxBytes: 20, delivery: 'out' },
       ),
     })).rejects.toThrow('CSV 输出超过结果字节预算');
     expect(fs.readFileSync(outPath, 'utf8')).toBe('existing');
   });
 
-  it('query failure preserves existing --out destination', async () => {
+  it('warning failure preserves an existing output destination and removes its temp file', async () => {
+    const outPath = temp('.unknown');
+    fs.writeFileSync(outPath, 'existing', 'utf8');
+    await expect(queryCommand(ds, 'SELECT 1', {
+      limit: 500, timeoutMs: 1000, out: outPath,
+      warn: () => { throw new Error('warning failed'); },
+    }, 'json', {}, {
+      getDialect: () => dialect(async (opts) => {
+        opts.onRow?.([1], ['n']);
+        return { columns: ['n'], rows: [[1]], rowCount: 1, resultBytes: 3, truncated: false, ms: 2 };
+      }),
+    })).rejects.toThrow('warning failed');
+    expect(fs.readFileSync(outPath, 'utf8')).toBe('existing');
+    expect(fs.readdirSync(path.dirname(outPath)).filter((name) => name.startsWith(path.basename(outPath) + '.tmp-'))).toEqual([]);
+  });
+
+  it('query failure preserves an existing output destination', async () => {
     const outPath = temp('.json');
     fs.writeFileSync(outPath, 'existing', 'utf8');
     await expect(queryCommand(ds, 'SELECT 1', {
-      limit: 500, timeoutMs: 1000, noSpill: false, out: outPath,
+      limit: 500, timeoutMs: 1000, out: outPath,
     }, 'json', {}, {
       getDialect: () => dialect(async (opts) => {
         opts.onRow?.([1], ['n']);

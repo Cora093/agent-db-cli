@@ -172,7 +172,6 @@ cat query.sql | agent-db query --ds prod-mysql-ro --file -
 --timeout <sec>          超时时间，默认 30 秒
 -f, --file <path>        SQL 文件；使用 - 表示从 stdin 读取
 --out <path>             将资源预算内的完整结果写入文件
---no-spill               不写入 spill 文件，改为内联输出预览
 ```
 
 ## 输出约定
@@ -192,7 +191,7 @@ cat query.sql | agent-db query --ds prod-mysql-ro --file -
 错误 JSON 同样带版本：`{"contractVersion":"1.0","error":{"category":"...","message":"..."}}`。
 
 - `rowCount` 是数据库返回给 CLI 的行数；`deliveredRowCount` 是当前 stdout/文件实际携带的行数。
-- `queryTruncated` 表示读取阶段因行数或结果字节预算丢弃了数据库行，`truncationReason` 区分 `row-limit` / `result-bytes`；`deliveryOmittedRows` 只表示预览或 `--no-spill` 在交付层省略的已接受行，两者不得混用。
+- `queryTruncated` 表示读取阶段因行数或结果字节预算丢弃了数据库行，`truncationReason` 区分 `row-limit` / `result-bytes`；`deliveryOmittedRows` 只表示当前交付未内联、但仍可从 spill artifact 读取的已接受行，两者不得混用。
 - `meta.mode` 为 `inline`、`preview`、`stdout` 或 `out`；路径和字节字段始终存在，不适用时为 `null`。
 - 所有 NDJSON（`list/tables/schema/query` stdout、spill、`--out .ndjson`）使用同一协议：第一行是版本化 `type: "header"`，含命令、原始 `columns`、唯一 `keys` 和 meta；后续是零或多个版本化 `type: "row"` 记录。流式文件最后追加版本化 `type: "trailer"` 和最终 meta；空结果仍有 header。
 - 重复列标签保留在列式 JSON/CSV 的原位置；NDJSON row 的对象 key 全局唯一，冲突时追加 `#N`。
@@ -206,9 +205,8 @@ agent-db capabilities
 
 它返回版本化 JSON，包含命令、只读 statement keywords/aliases（包括 `desc -> describe`）、limit/timeout、输出格式，以及每个 driver 的事务、服务端超时和自省能力。
 
-### 从 0.1.x 迁移
+## 只读安全模型
 
-消费方必须允许新增字段并检查 `contractVersion` 主版本。把旧 `meta.truncated` 迁移为 `meta.queryTruncated`，用 `deliveryOmittedRows` 判断 stdout 是否只是预览；用 `deliveredRowCount` 校验当前载荷。旧的“每行直接是数据对象”NDJSON 解析器必须改为先读取 `type: "header"`，再从每个 `type: "row"` 的 `row` 字段取数据。
 `agent-db-cli` 采用多层防护：
 
 1. 使用数据库只读账号。这是真正的安全边界。

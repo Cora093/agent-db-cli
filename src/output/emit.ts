@@ -1,9 +1,8 @@
-import path from 'node:path';
-import type { OutputFormat } from '../types.js';
 import type { QueryResult } from '../dialects/types.js';
-import { buildInlineJson, buildSpillJson, formatCsv, formatTable } from './format.js';
-import { withinInlineLimits, INLINE_MAX_ROWS } from './spill.js';
 import type { AppError } from '../errors.js';
+import type { OutPlan, OutputFormat } from './plan.js';
+import { buildInlineJson, buildSpillJson, formatCsv, formatTable } from './format.js';
+import { withinInlineLimits } from './spill.js';
 import { buildNdjson, buildQueryMeta, versioned } from './contract.js';
 
 export function renderError(err: AppError, format: OutputFormat): string {
@@ -15,40 +14,23 @@ export interface EmitInput {
   ds: string;
   result: QueryResult;
   format: OutputFormat;
-  noSpill: boolean;
-  outPath?: string;
+  outPlan?: OutPlan;
   streamFile?: { path: string; bytes: number };
 }
 
 export interface EmitDeps {
-  writeSpill?: (ds: string, ndjson: string) => string;
   writeOut?: (filePath: string, content: string) => { bytes: number };
   warn?: (msg: string) => void;
 }
 
-const OUT_EXT_FORMATS: Record<string, 'csv' | 'ndjson' | 'json'> = {
-  '.csv': 'csv',
-  '.ndjson': 'ndjson',
-  '.json': 'json',
-};
-
-export function inferOutFormat(
-  filePath: string,
-  fallback: OutputFormat,
-): 'csv' | 'ndjson' | 'json' | 'table' {
-  return OUT_EXT_FORMATS[path.extname(filePath).toLowerCase()] ?? fallback;
-}
-
-export function emitResult(input: EmitInput, deps: EmitDeps): string {
-  const { ds, result, format, noSpill, outPath, streamFile } = input;
+export function emitResult(input: EmitInput, deps: EmitDeps = {}): string {
+  const { ds, result, format, outPlan, streamFile } = input;
   const { columns, rows, truncated: queryTruncated, truncationReason, resultBytes, ms } = result;
   const rowCount = result.rowCount ?? rows.length;
 
-  if (outPath) {
-    const ext = path.extname(outPath).toLowerCase();
-    const outFormat = inferOutFormat(outPath, format);
-    if (!(ext in OUT_EXT_FORMATS)) {
-      deps.warn?.(`未知扩展名 ${ext || '(无)'},按 --format ${outFormat} 写入: ${outPath}`);
+  if (outPlan) {
+    if (!outPlan.recognizedExtension) {
+      deps.warn?.(`未知扩展名 ${outPlan.extension || '(无)'},按 --format ${outPlan.format} 写入: ${outPlan.path}`);
     }
     const persistedMeta = buildQueryMeta({
       rowCount,
@@ -56,13 +38,16 @@ export function emitResult(input: EmitInput, deps: EmitDeps): string {
       ms,
       queryTruncated,
       mode: 'out',
-      outPath,
+      outPath: outPlan.path,
       truncationReason,
       resultBytes,
     });
     const bytes = streamFile?.bytes ?? (() => {
-      if (!deps.writeOut) throw new Error('writeOut dependency is required for non-streamed output');
-      return deps.writeOut(outPath, serializeForFile(outFormat, ds, columns, rows, persistedMeta)).bytes;
+      if (!deps.writeOut) throw new Error('writeOut dependency is required for buffered output');
+      return deps.writeOut(
+        outPlan.path,
+        serializeForFile(outPlan.format, ds, columns, rows, persistedMeta),
+      ).bytes;
     })();
     return JSON.stringify(versioned({
       ds,
@@ -73,7 +58,7 @@ export function emitResult(input: EmitInput, deps: EmitDeps): string {
         ms,
         queryTruncated,
         mode: 'out',
-        outPath,
+        outPath: outPlan.path,
         bytes,
         truncationReason,
         resultBytes,
@@ -114,42 +99,11 @@ export function emitResult(input: EmitInput, deps: EmitDeps): string {
     }));
   }
 
-  if (noSpill) {
-    const delivered = rows.slice(0, INLINE_MAX_ROWS);
-    return JSON.stringify(buildInlineJson(ds, columns, delivered, ms, queryTruncated, {
-      truncationReason,
-      resultBytes,
-      rowCount,
-    }));
-  }
-
   const jsonBytes = resultBytes ?? Buffer.byteLength(JSON.stringify(rows), 'utf8');
-  if (withinInlineLimits(rowCount, jsonBytes)) {
-    return JSON.stringify(buildInlineJson(ds, columns, rows, ms, queryTruncated, {
-      truncationReason,
-      resultBytes,
-      rowCount,
-    }));
+  if (!withinInlineLimits(rowCount, jsonBytes)) {
+    throw new Error('large JSON result requires a streamed spill artifact');
   }
-
-  const ndjsonMeta = buildQueryMeta({
-    rowCount,
-    deliveredRowCount: rowCount,
-    ms,
-    queryTruncated,
-    mode: 'out',
-    truncationReason,
-    resultBytes,
-  });
-  const ndjson = buildNdjson({ command: 'query', ds, columns, meta: ndjsonMeta }, rows);
-  if (!deps.writeSpill) throw new Error('writeSpill dependency is required for non-streamed output');
-  const spillPath = deps.writeSpill(ds, ndjson);
-  const bytes = Buffer.byteLength(ndjson, 'utf8');
-  return JSON.stringify(buildSpillJson(ds, columns, rows, {
-    ms,
-    truncated: queryTruncated,
-    spillPath,
-    bytes,
+  return JSON.stringify(buildInlineJson(ds, columns, rows, ms, queryTruncated, {
     truncationReason,
     resultBytes,
     rowCount,
@@ -157,7 +111,7 @@ export function emitResult(input: EmitInput, deps: EmitDeps): string {
 }
 
 function serializeForFile(
-  format: 'csv' | 'ndjson' | 'json' | 'table',
+  format: OutputFormat,
   ds: string,
   columns: string[],
   rows: QueryResult['rows'],

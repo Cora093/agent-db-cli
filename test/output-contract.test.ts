@@ -12,20 +12,19 @@ const result: QueryResult = {
 };
 
 const deps = {
-  writeSpill: vi.fn(() => '/tmp/result.ndjson'),
   writeOut: vi.fn(() => ({ bytes: 10 })),
 };
 
 describe('output contract', () => {
   it('versions structured success and error JSON', () => {
-    const success = JSON.parse(emitResult({ ds: 'd', result, format: 'json', noSpill: false }, deps));
+    const success = JSON.parse(emitResult({ ds: 'd', result, format: 'json' }, deps));
     const error = JSON.parse(renderError(new AppError('BAD_USAGE', 'bad'), 'json'));
     expect(success.contractVersion).toBe(OUTPUT_CONTRACT_VERSION);
     expect(error.contractVersion).toBe(OUTPUT_CONTRACT_VERSION);
   });
 
   it('uses uniform inline metadata', () => {
-    const output = JSON.parse(emitResult({ ds: 'd', result, format: 'json', noSpill: false }, deps));
+    const output = JSON.parse(emitResult({ ds: 'd', result, format: 'json' }, deps));
     expect(output.meta).toEqual({
       rowCount: 1,
       deliveredRowCount: 1,
@@ -42,16 +41,16 @@ describe('output contract', () => {
   });
 
   it('preserves duplicate column values in JSON and CSV', () => {
-    const json = JSON.parse(emitResult({ ds: 'd', result, format: 'json', noSpill: false }, deps));
+    const json = JSON.parse(emitResult({ ds: 'd', result, format: 'json' }, deps));
     expect(json.columns).toEqual(['id', 'id', 'name']);
     expect(json.rows[0]).toEqual([1, 2, 'x']);
-    expect(emitResult({ ds: 'd', result, format: 'csv', noSpill: false }, deps)).toBe(
+    expect(emitResult({ ds: 'd', result, format: 'csv' }, deps)).toBe(
       'id,id,name\r\n1,2,x',
     );
   });
 
   it('emits independently parseable NDJSON with metadata first and unique keys', () => {
-    const output = emitResult({ ds: 'd', result, format: 'ndjson', noSpill: false }, deps);
+    const output = emitResult({ ds: 'd', result, format: 'ndjson' }, deps);
     const lines = output.split('\n').map((line) => JSON.parse(line));
     expect(lines).toEqual([
       {

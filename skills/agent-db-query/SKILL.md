@@ -42,12 +42,11 @@ list → namespaces → tables → schema → query
 - 查询默认就是列式 JSON;**给人看时**才加 `--format table`;要拖进 Excel 才 `--format csv`。
 - 结构化契约版本为 `1.0`；成功和错误 JSON 顶层都有 `contractVersion`。stdout 只含成功数据，stderr 只含错误/诊断/提示。
 - 默认列式 JSON 的 `meta` 固定含 `rowCount`、`deliveredRowCount`、`ms`、`queryTruncated`、`truncationReason`、`resultBytes`、`deliveryOmittedRows`、`mode`、路径和 `bytes`。
-- `queryTruncated` 代表读取因行数或结果字节预算停止；`deliveryOmittedRows` 代表 preview/`--no-spill` 交付省略。不要混用。
+- `queryTruncated` 代表读取因行数或结果字节预算停止；`deliveryOmittedRows` 代表 preview 未内联、但可从 spill artifact 读取的行。不要混用。
 - 错误（包括 Commander 参数错误）是单个版本化 JSON，只在 stderr；help/version 是 stdout 文本成功。
 - 所有 NDJSON 第一行都是版本化 `type: header`（空结果也有），后续是版本化 `type: row`，数据在 `row` 字段；流式文件最后有 `type: trailer` 完成 metadata。
 - SQL 有重复列名时，列式 JSON/CSV 按位置保留；NDJSON `keys` 全局唯一。优先给重复列显式 alias。
 - `.json`/`.ndjson` 文件内路径和 `bytes` 是最终值；stdout 摘要报告相同的完整文件 UTF-8 字节数。
-- 0.1.x 迁移：`truncated` 改读 `queryTruncated`；NDJSON 改为 header/row 分帧。
 
 ## 写 SQL:简单用位置参数,复杂写临时文件
 

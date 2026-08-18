@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
-import type { OutputFormat } from './types.js';
+import { OUTPUT_FORMATS, type OutputFormat } from './output/plan.js';
 import { AppError, toAppError } from './errors.js';
 import { loadConfig } from './config/load.js';
 import { renderError } from './output/emit.js';
@@ -27,11 +27,11 @@ export interface CliIO {
   readStdin?: () => string;
 }
 
-const VALID_FORMATS: OutputFormat[] = ['json', 'ndjson', 'table', 'csv'];
-
 function parseFormat(v: string): OutputFormat {
-  if (!(VALID_FORMATS as string[]).includes(v)) {
-    throw new AppError('BAD_USAGE', `未知 --format '${v}'`, { hint: '可用: json, ndjson, table, csv' });
+  if (!OUTPUT_FORMATS.some((format) => format === v)) {
+    throw new AppError('BAD_USAGE', `未知 --format '${v}'`, {
+      hint: `可用: ${OUTPUT_FORMATS.join(', ')}`,
+    });
   }
   return v as OutputFormat;
 }
@@ -66,7 +66,7 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
   const addCommon = (cmd: Command): Command =>
     cmd
       .option('--config <path>', '配置文件路径(覆盖默认按 OS 自算)')
-      .option('--format <fmt>', '输出格式 json|ndjson|table|csv', 'json');
+      .option('--format <fmt>', `输出格式 ${OUTPUT_FORMATS.join('|')}`, 'json');
 
   const begin = (opts: { format: string; config?: string }) => {
     currentFormat = parseFormat(opts.format);
@@ -118,7 +118,6 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     .option('--limit <n>', '行数上限 1..500(默认 500)', parseIntArg)
     .option('--timeout <s>', '服务端超时秒数(默认 30)', parseIntArg)
     .option('--out <path>', '导出到文件(持久,不 GC;按扩展名推断格式)')
-    .option('--no-spill', '绝不写落盘文件;内联并截断到阈值')
     .action(async (sqlArg: string | undefined, opts) => {
       const { fmt, cfg } = begin(opts);
       const ds = pickDatasource(cfg, opts.ds);
@@ -138,7 +137,6 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
           {
             limit,
             timeoutMs,
-            noSpill: opts.spill === false,
             out: opts.out,
             warn: (m) => io.err(m + '\n'),
           },

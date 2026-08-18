@@ -39,17 +39,6 @@ export function spillFileName(
 }
 
 /**
- * 把 NDJSON 写到落盘目录,返回完整路径。目录按需创建。
- */
-export function writeSpill(ds: string, ndjson: string): string {
-  const dir = spillDir();
-  fs.mkdirSync(dir, { recursive: true });
-  const full = path.join(dir, spillFileName(ds));
-  fs.writeFileSync(full, ndjson, 'utf8');
-  return full;
-}
-
-/**
  * 机会式 GC(§9b):删除超过 maxAgeMs(默认 24h)的完成文件和中断遗留临时文件。
  * 按龄删天然避开并发新文件;机制为尽力而为,任何错误吞掉不抛。
  */
